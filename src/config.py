@@ -26,6 +26,12 @@ Campos:
 MESES = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO",
          "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
 
+# Encabezado corto para las columnas de la matriz (más meses visibles a la vez).
+MESES_ABBR = {"ENERO": "Ene", "FEBRERO": "Feb", "MARZO": "Mar", "ABRIL": "Abr",
+              "MAYO": "May", "JUNIO": "Jun", "JULIO": "Jul", "AGOSTO": "Ago",
+              "SEPTIEMBRE": "Set", "OCTUBRE": "Oct", "NOVIEMBRE": "Nov",
+              "DICIEMBRE": "Dic"}
+
 # Todas las columnas posibles de DATOS_ENTRADA (unión de las 7 macros).
 COLS_DESTINO = ["HOJA_ORIGEN", "ORIGEN", "DNI", "NOMBRE", "CENTRO_COSTO",
                 "CONCEPTO", "CONCEPTO_2", "TIPO", "MES", "HORAS", "IMPORTE", "TARIFA"]
@@ -101,3 +107,9 @@ def cfg_de(hoja: str) -> dict:
     c = dict(PLANILLAS[hoja])
     c["_hoja"] = hoja
     return c
+
+
+def dims_fila(cfg: dict) -> list[str]:
+    """Dimensiones que van en las filas de la matriz: todas menos el MES,
+    que pasa a ser el eje de columnas."""
+    return [d for d in cfg["dimensiones"] if d != "MES"]

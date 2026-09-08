@@ -1,20 +1,20 @@
 """
-Componentes de interfaz.
+Componentes de interfaz — grilla matricial estilo Excel.
 
 Foco de experiencia:
-  - El monto presupuestado es el elemento vivo: cambia mientras se teclea,
-    y es el dato que hoy el usuario no ve hasta después de valorizar.
+  - Los 12 meses son columnas: se recupera la navegación horizontal de Excel
+    y se reduce ~12 veces el número de filas frente al formato largo.
+  - Se puede pegar un bloque de celdas desde Excel directamente en la grilla.
   - La grilla se pre-puebla con el padrón cuando aplica, para que el usuario
-    complete la métrica en vez de retipear DNIs y nombres.
-  - Los centros de costo se limitan a los del departamento: cada quien ve
-    solo lo suyo.
-  - Los estados vacíos y los errores orientan la acción.
+    complete solo las horas.
+  - Los centros de costo se limitan a los del departamento.
+  - El monto presupuestado reacciona mientras se teclea.
 """
 
 import pandas as pd
 import streamlit as st
 
-from .config import MESES, cfg_de
+from .config import MESES, MESES_ABBR, cfg_de, dims_fila
 from .validacion import formato_soles
 
 
@@ -37,6 +37,7 @@ def inyectar_estilos():
 def selector_contexto(repo):
     """Departamento y planilla. En producción el departamento debe venir del
     usuario autenticado (SSO); aquí es un selector para la demostración."""
+    from .config import PLANILLAS
     deptos = repo.departamentos()
     col1, col2 = st.columns([1, 2])
     with col1:
@@ -46,7 +47,6 @@ def selector_contexto(repo):
             format_func=lambda c: f"{c} · {dict(deptos)[c]}",
         )
     with col2:
-        from .config import PLANILLAS
         hoja = st.selectbox(
             "Planilla",
             list(PLANILLAS),
@@ -55,7 +55,7 @@ def selector_contexto(repo):
     return origen, hoja
 
 
-def hero(hoja: str, total_soles: float, horas: float, n: int):
+def hero(hoja: str, total_soles: float, horas: float, lineas: int, registros: int):
     cfg = cfg_de(hoja)
     if cfg["tarifa"] == "server":
         monto = f"{horas:,.0f} h"
@@ -66,7 +66,7 @@ def hero(hoja: str, total_soles: float, horas: float, n: int):
     st.markdown(
         f"""<div class="hero">
               <div class="monto">{monto}</div>
-              <div class="sub">{n} registro(s) cargado(s) en esta planilla</div>
+              <div class="sub">{lineas} línea(s) · {registros} registro(s) mensual(es)</div>
               <div class="nota">{nota}</div>
             </div>""",
         unsafe_allow_html=True,
@@ -74,22 +74,29 @@ def hero(hoja: str, total_soles: float, horas: float, n: int):
 
 
 def _semilla(cfg: dict, roster: pd.DataFrame) -> pd.DataFrame:
-    """Grilla inicial. Con padrón, una fila por docente ya identificada."""
-    cols = cfg["dimensiones"] + [cfg["metrica"]]
+    """Grilla inicial: dimensiones de fila + una columna por mes.
+    Con padrón, una fila por docente ya identificada."""
+    dims = dims_fila(cfg)
     if cfg["usa_roster"] and not roster.empty:
         base = roster.copy()
-        for c in cols:
-            if c not in base.columns:
-                base[c] = None
-        return base[cols]
-    return pd.DataFrame(columns=cols)
+        for d in dims:
+            if d not in base.columns:
+                base[d] = None
+        base = base[dims]
+    else:
+        base = pd.DataFrame(columns=dims)
+    for m in MESES:
+        base[m] = pd.Series(dtype="float64")
+    return base
 
 
 def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
            tarifas: dict) -> pd.DataFrame:
-    """data_editor genérico armado desde la config."""
+    """data_editor matricial: dimensiones a la izquierda, 12 meses a la derecha."""
     ccos_opts = ccos["CODIGO_CECO"].tolist()
-    etiqueta_ceco = dict(zip(ccos["CODIGO_CECO"], ccos["DESCRIPCION_CECO"]))
+    dims = dims_fila(cfg)
+    metrica = cfg["metrica"]
+    unidad = "horas" if metrica == "HORAS" else "importe (S/)"
 
     colcfg = {
         "DNI": st.column_config.TextColumn("DNI", disabled=cfg["usa_roster"]),
@@ -100,41 +107,46 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
             help="Solo aparecen los centros de costo de tu departamento."),
         "CONCEPTO": st.column_config.TextColumn("Concepto"),
         "CONCEPTO_2": st.column_config.TextColumn("Detalle"),
-        "MES": st.column_config.SelectboxColumn("Mes", options=MESES, required=True),
     }
     if cfg["tarifa"] == "catalogo":
         colcfg[cfg["catalogo_key"]] = st.column_config.SelectboxColumn(
             "Tipo", options=list(tarifas), required=True,
             help="La tarifa se aplica sola según el tipo. No se teclea el precio.")
-    if cfg["metrica"] == "HORAS":
-        colcfg["HORAS"] = st.column_config.NumberColumn(
-            "Horas", min_value=0.0, step=1.0, required=True, format="%.2f")
-    else:
-        colcfg["IMPORTE"] = st.column_config.NumberColumn(
-            "Importe (S/)", min_value=0.0, step=100.0, required=True, format="%.2f")
+
+    # columnas de mes (encabezado corto para ver más meses a la vez)
+    fmt = "%.1f" if metrica == "HORAS" else "%.2f"
+    for m in MESES:
+        colcfg[m] = st.column_config.NumberColumn(
+            MESES_ABBR[m], min_value=0.0, format=fmt, width="small")
+
+    st.caption(f"Escribe las {unidad} de cada mes en su columna. "
+               "Puedes pegar un bloque de celdas copiado desde Excel.")
 
     df = _semilla(cfg, roster)
+    columnas = dims + MESES
     editado = st.data_editor(
         df, num_rows="dynamic", use_container_width=True, hide_index=True,
-        column_config={k: v for k, v in colcfg.items()
-                       if k in cfg["dimensiones"] + [cfg["metrica"]]},
+        column_config={k: colcfg[k] for k in columnas if k in colcfg},
         key=f"grilla_{cfg['_hoja']}",
     )
-    if etiqueta_ceco:
-        with st.expander("Ver descripción de los centros de costo"):
-            st.dataframe(ccos.rename(columns={"CODIGO_CECO": "Código",
-                                              "DESCRIPCION_CECO": "Descripción"}),
-                         hide_index=True, use_container_width=True)
+
+    with st.expander("Ver descripción de los centros de costo"):
+        st.dataframe(ccos.rename(columns={"CODIGO_CECO": "Código",
+                                          "DESCRIPCION_CECO": "Descripción"}),
+                     hide_index=True, use_container_width=True)
     return editado
 
 
-def resumen_por_ceco(hoja: str, df: pd.DataFrame, tarifas: dict):
+def resumen_por_ceco(hoja: str, df: pd.DataFrame):
+    """Total por centro de costo, sumando los 12 meses."""
     cfg = cfg_de(hoja)
-    if df.empty:
+    meses = [m for m in MESES if m in df.columns]
+    if df.empty or not meses:
         return
-    metrica = cfg["metrica"]
-    val = pd.to_numeric(df[metrica], errors="coerce").fillna(0)
-    tmp = df.assign(_val=val)
-    resumen = tmp.groupby("CENTRO_COSTO")["_val"].sum().reset_index()
-    resumen.columns = ["Centro de costo", metrica.title()]
+    val = df[meses].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    tmp = df.assign(_total=val.sum(axis=1))
+    tmp = tmp[tmp["_total"] > 0]
+    resumen = tmp.groupby("CENTRO_COSTO")["_total"].sum().reset_index()
+    etiqueta = "Horas" if cfg["metrica"] == "HORAS" else "Importe (S/)"
+    resumen.columns = ["Centro de costo", etiqueta]
     st.dataframe(resumen, hide_index=True, use_container_width=True)
