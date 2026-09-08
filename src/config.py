@@ -20,7 +20,7 @@ Campos:
                departamento para que el usuario solo complete la métrica.
   sps          Procedimientos de valorización a ejecutar tras la carga, en orden.
                (nombre, pasa_OrigenEntrada)
-  ayuda        Una línea que orienta al usuario en la interfaz.
+"ayuda": "Ingresa el importe presupuestado por programa y mes. (prueba de flujo)",
 """
 
 MESES = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO",
