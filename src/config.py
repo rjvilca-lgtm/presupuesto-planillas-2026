@@ -71,7 +71,7 @@ PLANILLAS = {
         "tarifa": None,
         "usa_roster": False,
         "sps": [("sp_Valorizar_Postgrado_2026", True)],
-        "ayuda": "Ingresa el importe presupuestado por programa y mes.",
+        "ayuda": "Ingresa el importe presupuestado por programa y mes. (prueba de flujo)",
     },
     "Investigacion": {
         "etiqueta": "Investigación",
