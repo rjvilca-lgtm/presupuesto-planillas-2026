@@ -171,22 +171,32 @@ def crear_repositorio():
 
 
 def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list, list]:
-    """Convierte la grilla del usuario en filas listas para DATOS_ENTRADA.
-    Aplica la tarifa desde el catálogo (server-side) cuando corresponde;
-    el usuario nunca la teclea."""
+    """Derrite la matriz (meses en columnas) a formato largo para DATOS_ENTRADA:
+    un registro por cada celda mensual con valor > 0. Aplica la tarifa desde el
+    catálogo (server-side) cuando corresponde; el usuario nunca la teclea."""
+    from .config import MESES, dims_fila
     cfg = cfg_de(hoja)
-    cols = ["HOJA_ORIGEN", "ORIGEN"] + cfg["dimensiones"] + [cfg["metrica"]]
+    dims = dims_fila(cfg)
+    metrica = cfg["metrica"]
+    meses = [m for m in MESES if m in df.columns]
+
+    largo = df.melt(id_vars=dims, value_vars=meses,
+                    var_name="MES", value_name=metrica)
+    largo[metrica] = pd.to_numeric(largo[metrica], errors="coerce").fillna(0.0)
+    largo = largo[largo[metrica] > 0]              # solo celdas con valor
+
+    cols = ["HOJA_ORIGEN", "ORIGEN"] + cfg["dimensiones"] + [metrica]
     tarifas = {}
     if cfg["tarifa"] == "catalogo":
         cols.append("TARIFA")
         tarifas = repo.tarifas(hoja)
 
     filas = []
-    for _, r in df.iterrows():
+    for _, r in largo.iterrows():
         reg = {"HOJA_ORIGEN": hoja, "ORIGEN": origen}
-        for dim in cfg["dimensiones"]:
+        for dim in cfg["dimensiones"]:               # incluye MES
             reg[dim] = r[dim]
-        reg[cfg["metrica"]] = float(r[cfg["metrica"]])
+        reg[metrica] = float(r[metrica])
         if cfg["tarifa"] == "catalogo":
             reg["TARIFA"] = float(tarifas[r[cfg["catalogo_key"]]])
         filas.append([reg[c] for c in cols])
