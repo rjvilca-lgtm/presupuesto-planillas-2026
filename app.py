@@ -13,7 +13,7 @@ import streamlit as st
 
 from src.config import cfg_de
 from src.repositorio import crear_repositorio, preparar_filas
-from src.validacion import estimar_importe, total_horas, validar
+from src.validacion import conteo, estimar_importe, total_horas, validar
 from src.vistas import (grilla, hero, inyectar_estilos, resumen_por_ceco,
                         selector_contexto)
 
@@ -48,9 +48,9 @@ def main():
 
     # feedback en vivo
     total = estimar_importe(hoja, editado, tarifas)
-    horas = total_horas(editado)
-    n = len(editado.dropna(how="all"))
-    hero(hoja, total, horas, n)
+    horas = total_horas(hoja, editado)
+    lineas, registros = conteo(editado)
+    hero(hoja, total, horas, lineas, registros)
 
     # guardado con confirmación
     st.divider()
@@ -67,7 +67,7 @@ def main():
         with st.container(border=True):
             st.subheader("Confirmar carga")
             st.write(f"Planilla **{cfg['etiqueta']}** · Departamento **{origen}**")
-            resumen_por_ceco(hoja, editado, tarifas)
+            resumen_por_ceco(hoja, editado)
             st.caption("Al confirmar se reemplaza la carga anterior de esta "
                        "planilla para este departamento y se ejecuta la valorización.")
             c1, c2 = st.columns(2)
