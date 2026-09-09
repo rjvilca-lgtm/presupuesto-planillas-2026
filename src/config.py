@@ -18,6 +18,11 @@ Campos:
   catalogo_key Dimensión contra la que se busca la tarifa (p. ej. "TIPO").
   usa_roster   Si True, la grilla se pre-puebla con el padrón de docentes del
                departamento para que el usuario solo complete la métrica.
+               También activa la ficha por docente (vistas.ficha_docente) en
+               vez de la grilla matricial.
+  semestre     Solo para hojas con usa_roster=True: clave de SEMESTRES que
+               indica a qué 6 meses corresponde esta hoja (la ficha entra un
+               solo valor por CECO/concepto y lo replica en esos 6 meses).
   sps          Procedimientos de valorización a ejecutar tras la carga, en orden.
                (nombre, pasa_OrigenEntrada)
 "ayuda": "Ingresa el importe presupuestado por programa y mes. (prueba de flujo)",
@@ -32,6 +37,15 @@ MESES_ABBR = {"ENERO": "Ene", "FEBRERO": "Feb", "MARZO": "Mar", "ABRIL": "Abr",
               "SEPTIEMBRE": "Set", "OCTUBRE": "Oct", "NOVIEMBRE": "Nov",
               "DICIEMBRE": "Dic"}
 
+# Semestres para el selector de la grilla: reduce el scroll horizontal a 6
+# columnas de mes a la vez. El guardado sigue derritiendo los 12 meses
+# (repositorio.py deriva los meses de las columnas del DataFrame, que
+# conserva los 12 aunque solo se muestren 6).
+SEMESTRES = {
+    "I semestre (Ene-Jun)": MESES[:6],
+    "II semestre (Jul-Dic)": MESES[6:],
+}
+
 # Todas las columnas posibles de DATOS_ENTRADA (unión de las 7 macros).
 COLS_DESTINO = ["HOJA_ORIGEN", "ORIGEN", "DNI", "NOMBRE", "CENTRO_COSTO",
                 "CONCEPTO", "CONCEPTO_2", "TIPO", "MES", "HORAS", "IMPORTE", "TARIFA"]
@@ -43,6 +57,7 @@ PLANILLAS = {
         "dimensiones": ["DNI", "NOMBRE", "CENTRO_COSTO", "CONCEPTO", "MES"],
         "tarifa": "server",
         "usa_roster": True,
+        "semestre": "I semestre (Ene-Jun)",
         "sps": [("sp_ValorizarPlanilla_Total_2026", True),
                 ("sp_Valorizar_CargaAcademica_2026", False)],
         "ayuda": "Registra las horas de cada docente por centro de costo. "
@@ -54,6 +69,7 @@ PLANILLAS = {
         "dimensiones": ["DNI", "NOMBRE", "CENTRO_COSTO", "CONCEPTO", "MES"],
         "tarifa": "server",
         "usa_roster": True,
+        "semestre": "II semestre (Jul-Dic)",
         "sps": [("sp_ValorizarPlanilla_Total_2026", True),
                 ("sp_Valorizar_CargaAcademica_2026", False)],
         "ayuda": "Registra las horas de cada docente por centro de costo. "
@@ -77,7 +93,7 @@ PLANILLAS = {
         "tarifa": None,
         "usa_roster": False,
         "sps": [("sp_Valorizar_Postgrado_2026", True)],
-        "ayuda": "Ingresa el importe presupuestado por programa y mes. (prueba de flujo)",
+        "ayuda": "Ingresa el importe presupuestado por programa y mes.",
     },
     "Investigacion": {
         "etiqueta": "Investigación",

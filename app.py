@@ -14,8 +14,8 @@ import streamlit as st
 from src.config import cfg_de
 from src.repositorio import crear_repositorio, preparar_filas
 from src.validacion import conteo, estimar_importe, total_horas, validar
-from src.vistas import (grilla, hero, inyectar_estilos, resumen_por_ceco,
-                        selector_contexto)
+from src.vistas import (ficha_docente, grilla, hero, inyectar_estilos,
+                        resumen_por_ceco, selector_contexto)
 
 
 def main():
@@ -44,7 +44,11 @@ def main():
                    "Cárgalos en el catálogo antes de presupuestar.", icon="⚠️")
         return
 
-    editado = grilla(cfg, ccos, roster, tarifas)
+    if cfg["usa_roster"]:
+        estructura = repo.estructura_tc(origen)
+        editado = ficha_docente(cfg, ccos, estructura, roster, origen)
+    else:
+        editado = grilla(cfg, ccos, roster, tarifas, origen)
 
     # feedback en vivo
     total = estimar_importe(hoja, editado, tarifas)

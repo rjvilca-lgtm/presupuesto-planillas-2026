@@ -63,6 +63,29 @@ _ROSTER_DEMO = {
 _DEPARTAMENTOS = [("DAIC", "Arquitectura e Ingeniería"),
                   ("DMAT", "Matemática y Estadística")]
 
+# Estructura CECO -> conceptos para la ficha por docente (planillas TC).
+# Vocabulario de conceptos derivado de las columnas de horas (G-W) de la
+# hoja real "Hoja DTC.xlsx" (una fila por docente, un CECO puede repetirse
+# en varios conceptos), pero mapeado sobre los CECOs demo de arriba.
+# TODO: cuando exista la tabla maestra en SQL (p. ej. CECO_CONCEPTO_TC),
+# reemplazar este dict y RepositorioSQL.estructura_tc() por una consulta a
+# esa tabla, filtrada por departamento.
+_CECO_CONCEPTOS_DEMO = {
+    "DAIC": {
+        "03.01.07.01.01": ["Gestión Administrativa", "Gestión de Dirección"],
+        "03.01.07.02.01": ["Horas Dictado Pregrado", "Otras Actividades Pregrado"],
+        "03.01.07.02.02": ["Horas Dictado Pregrado", "Otras Actividades Pregrado"],
+        "03.01.07.03.01": ["Gestión Administrativa Postgrado"],
+        "03.01.07.04.01": ["Gestión Administrativa Investigación", "Horas de Investigación"],
+        "03.01.07.05.01": ["Proyectos Solidarios", "Servicios a Terceros"],
+    },
+    "DMAT": {
+        "03.01.08.01.01": ["Gestión Administrativa", "Gestión de Dirección"],
+        "03.01.08.02.01": ["Horas Dictado Pregrado", "Otras Actividades Pregrado"],
+        "03.01.08.04.01": ["Gestión Administrativa Investigación", "Horas de Investigación"],
+    },
+}
+
 
 class RepositorioDemo:
     """Todo en memoria. No escribe en ninguna base."""
@@ -82,6 +105,19 @@ class RepositorioDemo:
     def roster(self, origen: str) -> pd.DataFrame:
         filas = _ROSTER_DEMO.get(origen, [])
         return pd.DataFrame(filas, columns=["DNI", "NOMBRE"])
+
+    def estructura_tc(self, origen: str) -> pd.DataFrame:
+        """CECO -> conceptos para la ficha por docente (planillas TC).
+        Una fila por par (CODIGO_CECO, CONCEPTO); un mismo CECO puede
+        repetirse con varios conceptos, igual que en la hoja real."""
+        ccos = dict(_CCOS_DEMO.get(origen, []))
+        conceptos = _CECO_CONCEPTOS_DEMO.get(origen, {})
+        filas = [
+            (ceco, ccos.get(ceco, ceco), concepto)
+            for ceco, lista in conceptos.items()
+            for concepto in lista
+        ]
+        return pd.DataFrame(filas, columns=["CODIGO_CECO", "DESCRIPCION_CECO", "CONCEPTO"])
 
     def guardar(self, hoja: str, origen: str, filas: list[list]) -> int:
         # En demo no se persiste; se confirma como si hubiera cargado.
@@ -133,6 +169,15 @@ class RepositorioSQL:
             return pd.read_sql(
                 "SELECT DNI, NOMBRE FROM padron_docentes WHERE DEPARTAMENTO = ?",
                 conn, params=[origen])
+
+    def estructura_tc(self, origen: str) -> pd.DataFrame:
+        # TODO: todavía no existe una tabla maestra CECO -> conceptos en SQL.
+        # Cuando se cree (p. ej. CECO_CONCEPTO_TC con columnas CODIGO_CECO,
+        # DESCRIPCION_CECO, CONCEPTO, DEPARTAMENTO), reemplazar por algo como:
+        #   SELECT CODIGO_CECO, DESCRIPCION_CECO, CONCEPTO
+        #   FROM CECO_CONCEPTO_TC WHERE DEPARTAMENTO = ?
+        raise NotImplementedError(
+            "estructura_tc: falta la tabla maestra CECO->concepto en SQL.")
 
     def guardar(self, hoja: str, origen: str, filas: list[list], cols: list[str],
                 sps: list[tuple]) -> int:
