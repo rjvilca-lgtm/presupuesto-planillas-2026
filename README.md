@@ -57,9 +57,18 @@ no escribe en ninguna base). Es el modo pensado para revisar la experiencia.
 2. En share.streamlit.io: **New app** → elige el repo, rama y `app.py`.
 3. Sin secrets, la app queda pública en modo demostración.
 4. Para producción, pega el contenido de `secrets.toml` en
-   **Settings → Secrets**. Nota: el runtime de Community Cloud puede no traer
-   el driver ODBC; para conectar Azure SQL suele convenir un host propio
-   (Azure App Service / contenedor) con el driver instalado.
+   **Settings → Secrets**.
+5. `packages.txt` ya instala `unixodbc` + `tdsodbc` (FreeTDS), el driver ODBC
+   que sí se puede instalar en Community Cloud (el "ODBC Driver 18 for SQL
+   Server" de Microsoft exige su propio repo APT, que ahí no se puede
+   agregar). `RepositorioSQL` lo usa por defecto; no hace falta tocar nada
+   salvo que corras en un host propio con el driver de Microsoft instalado
+   (ver `driver` en `secrets.toml.example`).
+6. En Azure SQL, habilita el firewall para que Community Cloud pueda
+   conectarse: **Networking → Firewall rules**. No publica IPs fijas de
+   salida, así que para probar conviene permitir temporalmente todo el rango
+   (`0.0.0.0` – `255.255.255.255`) y luego acotarlo, o dejar la cuenta de
+   servicio con permisos mínimos como mitigación mientras tanto.
 
 ## Pendientes antes de producción
 

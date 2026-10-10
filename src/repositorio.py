@@ -131,11 +131,26 @@ class RepositorioSQL:
 
     def __init__(self, secrets):
         s = secrets["sql"]
-        self._cn = (
-            f"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER={s['server']};"
-            f"DATABASE={s['database']};UID={s['username']};PWD={s['password']};"
-            f"Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
-        )
+        # Driver por defecto: FreeTDS, el único que se puede instalar en
+        # Streamlit Community Cloud (vía packages.txt; el "ODBC Driver 18 for
+        # SQL Server" de Microsoft requiere su propio repo APT, que ahí no se
+        # puede agregar). En un host propio con el driver de Microsoft
+        # instalado, basta con fijar `driver = "ODBC Driver 18 for SQL
+        # Server"` en secrets.toml para volver a ese camino.
+        driver = s.get("driver", "FreeTDS")
+        partes = [f"DRIVER={{{driver}}}", f"SERVER={s['server']}",
+                  f"DATABASE={s['database']}", f"UID={s['username']}",
+                  f"PWD={s['password']}"]
+        if driver == "FreeTDS":
+            # FreeTDS no reconoce Encrypt/TrustServerCertificate del driver de
+            # Microsoft; TDS_Version 8.0 es la que negocia TLS 1.2+ con Azure
+            # SQL (Azure exige TLS; versiones de protocolo más viejas fallan).
+            partes += [f"PORT={s.get('port', 1433)}",
+                       f"TDS_Version={s.get('tds_version', '8.0')}"]
+        else:
+            partes += ["Encrypt=yes", "TrustServerCertificate=no",
+                       "Connection Timeout=30"]
+        self._cn = ";".join(partes) + ";"
 
     @contextmanager
     def _conn(self):

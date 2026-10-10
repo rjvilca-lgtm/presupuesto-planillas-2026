@@ -1,0 +1,8 @@
+# Dependencias de sistema para pyodbc + Azure SQL en Streamlit Community
+# Cloud. El "ODBC Driver 18 for SQL Server" de Microsoft no se puede instalar
+# aquí (exige agregar su propio repo APT); unixodbc + tdsodbc (FreeTDS) sí
+# están en los repos Debian estándar y alcanzan para hablar con Azure SQL.
+unixodbc
+unixodbc-dev
+tdsodbc
+freetds-bin
