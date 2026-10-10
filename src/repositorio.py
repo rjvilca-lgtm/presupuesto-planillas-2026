@@ -136,6 +136,7 @@ TIMEOUT_CONEXION = 15
 
 
 def _conectar_con_timeout(server, port, database, user, password):
+    import certifi
     import pytds
 
     def _intentar():
@@ -145,6 +146,11 @@ def _conectar_con_timeout(server, port, database, user, password):
             server=server, port=port, database=database,
             user=user, password=password,
             autocommit=False, login_timeout=TIMEOUT_CONEXION,
+            # Azure SQL exige TLS (ENCRYPT_REQ); sin cafile, pytds declara
+            # "no soporto encriptación" (ENCRYPT_NOT_SUP) y el servidor
+            # corta la conexión. certifi.where() da el bundle de CAs
+            # públicas que valida el certificado de *.database.windows.net.
+            cafile=certifi.where(),
         )
         print(f"[sql] conectado en {time.time() - t0:.1f}s", flush=True)
         return conn
