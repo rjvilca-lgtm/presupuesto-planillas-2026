@@ -46,6 +46,11 @@ SEMESTRES = {
     "II semestre (Jul-Dic)": MESES[6:],
 }
 
+# Meta semanal de horas para la barra de avance en la ficha por docente
+# (vistas.ficha_docente). Es solo referencia visual: no valida ni bloquea
+# el guardado.
+HORAS_META_TC = 40
+
 # Todas las columnas posibles de DATOS_ENTRADA (unión de las 7 macros).
 COLS_DESTINO = ["HOJA_ORIGEN", "ORIGEN", "DNI", "NOMBRE", "CENTRO_COSTO",
                 "CONCEPTO", "CONCEPTO_2", "TIPO", "MES", "HORAS", "IMPORTE", "TARIFA"]

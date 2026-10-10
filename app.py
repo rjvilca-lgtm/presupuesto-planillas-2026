@@ -14,8 +14,8 @@ import streamlit as st
 from src.config import cfg_de
 from src.repositorio import crear_repositorio, preparar_filas
 from src.validacion import conteo, estimar_importe, total_horas, validar
-from src.vistas import (ficha_docente, grilla, hero, inyectar_estilos,
-                        resumen_por_ceco, selector_contexto)
+from src.vistas import (TC_HOJAS, ficha_docente, grilla, hero,
+                        inyectar_estilos, resumen_por_ceco, selector_contexto)
 
 
 def main():
@@ -31,24 +31,90 @@ def main():
                 "ninguna base. Para conectar Azure SQL, configura los secrets.",
                 icon="🧪")
 
-    origen, hoja = selector_contexto(repo)
-    cfg = cfg_de(hoja)
-    st.caption(cfg["ayuda"])
-
+    origen, seleccion = selector_contexto(repo)
     ccos = repo.centros_costo(origen)
-    roster = repo.roster(origen) if cfg["usa_roster"] else roster_vacio()
-    tarifas = repo.tarifas(hoja) if cfg["tarifa"] == "catalogo" else {}
-
     if ccos.empty:
         st.warning(f"El departamento {origen} no tiene centros de costo cargados. "
                    "Cárgalos en el catálogo antes de presupuestar.", icon="⚠️")
         return
 
-    if cfg["usa_roster"]:
+    if seleccion == "TC":
+        st.caption(cfg_de(TC_HOJAS[0])["ayuda"])
+        roster = repo.roster(origen)
         estructura = repo.estructura_tc(origen)
-        editado = ficha_docente(cfg, ccos, estructura, roster, origen)
+        pestañas = st.tabs(["I semestre (Ene-Jun)", "II semestre (Jul-Dic)"])
+        for hoja, tab in zip(TC_HOJAS, pestañas):
+            with tab:
+                renderizar_planilla(repo, hoja, ccos, roster, estructura, {}, origen)
+        return
+
+    cfg = cfg_de(seleccion)
+    st.caption(cfg["ayuda"])
+    roster = repo.roster(origen) if cfg["usa_roster"] else roster_vacio()
+    tarifas = repo.tarifas(seleccion) if cfg["tarifa"] == "catalogo" else {}
+    renderizar_planilla(repo, seleccion, ccos, roster, None, tarifas, origen)
+
+
+def renderizar_planilla(repo, hoja, ccos, roster, estructura, tarifas, origen):
+    """Ficha o grilla + feedback en vivo + guardado con confirmación, para
+    una sola hoja. Aislado en una función porque la vista TC lo invoca una
+    vez por pestaña de semestre; las claves de session_state y de widgets
+    usan `hoja` para no chocar entre pestañas que corren en el mismo rerun."""
+    cfg = cfg_de(hoja)
+    if cfg["usa_roster"]:
+        _renderizar_ficha_tc(repo, hoja, cfg, ccos, roster, estructura, tarifas, origen)
     else:
-        editado = grilla(cfg, ccos, roster, tarifas, origen)
+        _renderizar_grilla(repo, hoja, cfg, ccos, roster, tarifas, origen)
+
+
+def _renderizar_ficha_tc(repo, hoja, cfg, ccos, roster, estructura, tarifas, origen):
+    """Vista maestro-detalle de la ficha TC: resumen de docentes/horas arriba
+    (lo pinta ficha_docente con un placeholder propio), y guardado con
+    confirmación en una barra inferior sticky."""
+    editado = ficha_docente(cfg, ccos, estructura, roster, origen)
+
+    # guardado con confirmación (disparador en barra sticky; el resto del
+    # flujo — validación, diálogo de confirmación — es idéntico al de la grilla)
+    listo_key = f"_listo_{hoja}"
+    ccos_validos = set(ccos["CODIGO_CECO"])
+    st.markdown('<div style="height:60px"></div>', unsafe_allow_html=True)
+    with st.container(key=f"barra_guardar_{hoja}"):
+        c_info, c_btn = st.columns([3, 1])
+        c_info.markdown(
+            f'<div class="bottom-info">{cfg["etiqueta"]} · {len(roster)} docente(s)</div>',
+            unsafe_allow_html=True)
+        clic_guardar = c_btn.button("Guardar cambios", type="primary",
+                                    use_container_width=True, key=f"btn_guardar_{hoja}")
+    if clic_guardar:
+        errores = validar(hoja, editado, ccos_validos, tarifas)
+        if errores:
+            for e in errores:
+                st.error(e, icon="⚠️")
+            return
+        st.session_state[listo_key] = True
+
+    if st.session_state.get(listo_key):
+        with st.container(border=True):
+            st.subheader("Confirmar carga")
+            st.write(f"Planilla **{cfg['etiqueta']}** · Departamento **{origen}**")
+            resumen_por_ceco(hoja, editado)
+            st.caption("Al confirmar se reemplaza la carga anterior de esta "
+                       "planilla para este departamento y se ejecuta la valorización.")
+            c1, c2 = st.columns(2)
+            if c1.button("Confirmar y valorizar", type="primary",
+                         use_container_width=True, key=f"btn_conf_{hoja}"):
+                guardar(repo, hoja, origen, editado)
+                st.session_state[listo_key] = False
+            if c2.button("Cancelar", use_container_width=True,
+                         key=f"btn_cancel_{hoja}"):
+                st.session_state[listo_key] = False
+                st.rerun()
+
+
+def _renderizar_grilla(repo, hoja, cfg, ccos, roster, tarifas, origen):
+    """Flujo original (grilla matricial + feedback + guardado), sin cambios,
+    para las planillas que no usan la ficha por docente."""
+    editado = grilla(cfg, ccos, roster, tarifas, origen)
 
     # feedback en vivo
     total = estimar_importe(hoja, editado, tarifas)
@@ -58,16 +124,18 @@ def main():
 
     # guardado con confirmación
     st.divider()
+    listo_key = f"_listo_{hoja}"
     ccos_validos = set(ccos["CODIGO_CECO"])
-    if st.button("Revisar y guardar", type="primary", use_container_width=True):
+    if st.button("Revisar y guardar", type="primary", use_container_width=True,
+                key=f"btn_guardar_{hoja}"):
         errores = validar(hoja, editado, ccos_validos, tarifas)
         if errores:
             for e in errores:
                 st.error(e, icon="⚠️")
             return
-        st.session_state["_listo"] = True
+        st.session_state[listo_key] = True
 
-    if st.session_state.get("_listo"):
+    if st.session_state.get(listo_key):
         with st.container(border=True):
             st.subheader("Confirmar carga")
             st.write(f"Planilla **{cfg['etiqueta']}** · Departamento **{origen}**")
@@ -76,11 +144,12 @@ def main():
                        "planilla para este departamento y se ejecuta la valorización.")
             c1, c2 = st.columns(2)
             if c1.button("Confirmar y valorizar", type="primary",
-                         use_container_width=True):
+                         use_container_width=True, key=f"btn_conf_{hoja}"):
                 guardar(repo, hoja, origen, editado)
-                st.session_state["_listo"] = False
-            if c2.button("Cancelar", use_container_width=True):
-                st.session_state["_listo"] = False
+                st.session_state[listo_key] = False
+            if c2.button("Cancelar", use_container_width=True,
+                         key=f"btn_cancel_{hoja}"):
+                st.session_state[listo_key] = False
                 st.rerun()
 
 
