@@ -125,37 +125,35 @@ class RepositorioDemo:
 
 
 class RepositorioSQL:
-    """Producción sobre Azure SQL. Requiere secrets['sql']."""
+    """Producción sobre Azure SQL. Requiere secrets['sql'].
+
+    Usa python-tds (import pytds): driver 100% Python, sin dependencias de
+    sistema. En Streamlit Community Cloud no se puede instalar ni el ODBC
+    Driver 18 de Microsoft (exige su propio repo APT) ni FreeTDS vía apt
+    (tdsodbc choca con el unixODBC que ya trae la imagen); pytds evita el
+    problema por completo al no necesitar nada fuera de pip.
+
+    Nota de sintaxis: los parámetros usan %s (paramstyle de pytds), no el
+    ? de pyodbc/ODBC."""
 
     modo = "sql"
 
     def __init__(self, secrets):
         s = secrets["sql"]
-        # Driver por defecto: FreeTDS, el único que se puede instalar en
-        # Streamlit Community Cloud (vía packages.txt; el "ODBC Driver 18 for
-        # SQL Server" de Microsoft requiere su propio repo APT, que ahí no se
-        # puede agregar). En un host propio con el driver de Microsoft
-        # instalado, basta con fijar `driver = "ODBC Driver 18 for SQL
-        # Server"` en secrets.toml para volver a ese camino.
-        driver = s.get("driver", "FreeTDS")
-        partes = [f"DRIVER={{{driver}}}", f"SERVER={s['server']}",
-                  f"DATABASE={s['database']}", f"UID={s['username']}",
-                  f"PWD={s['password']}"]
-        if driver == "FreeTDS":
-            # FreeTDS no reconoce Encrypt/TrustServerCertificate del driver de
-            # Microsoft; TDS_Version 8.0 es la que negocia TLS 1.2+ con Azure
-            # SQL (Azure exige TLS; versiones de protocolo más viejas fallan).
-            partes += [f"PORT={s.get('port', 1433)}",
-                       f"TDS_Version={s.get('tds_version', '8.0')}"]
-        else:
-            partes += ["Encrypt=yes", "TrustServerCertificate=no",
-                       "Connection Timeout=30"]
-        self._cn = ";".join(partes) + ";"
+        self._server = s["server"]
+        self._port = int(s.get("port", 1433))
+        self._database = s["database"]
+        self._user = s["username"]
+        self._password = s["password"]
 
     @contextmanager
     def _conn(self):
-        import pyodbc
-        conn = pyodbc.connect(self._cn, autocommit=False)  # transacción manual
+        import pytds
+        conn = pytds.connect(
+            server=self._server, port=self._port, database=self._database,
+            user=self._user, password=self._password,
+            autocommit=False, login_timeout=30,  # transacción manual
+        )
         try:
             yield conn
         finally:
@@ -169,20 +167,20 @@ class RepositorioSQL:
     def centros_costo(self, origen: str) -> pd.DataFrame:
         with self._conn() as conn:
             return pd.read_sql(
-                "SELECT CODIGO_CECO, DESCRIPCION_CECO FROM cc WHERE DEPARTAMENTO = ?",
+                "SELECT CODIGO_CECO, DESCRIPCION_CECO FROM cc WHERE DEPARTAMENTO = %s",
                 conn, params=[origen])
 
     def tarifas(self, hoja: str) -> dict:
         with self._conn() as conn:
             df = pd.read_sql(
-                "SELECT TIPO, TARIFA FROM tarifas_2026 WHERE HOJA_ORIGEN = ?",
+                "SELECT TIPO, TARIFA FROM tarifas_2026 WHERE HOJA_ORIGEN = %s",
                 conn, params=[hoja])
         return dict(zip(df["TIPO"], df["TARIFA"]))
 
     def roster(self, origen: str) -> pd.DataFrame:
         with self._conn() as conn:
             return pd.read_sql(
-                "SELECT DNI, NOMBRE FROM padron_docentes WHERE DEPARTAMENTO = ?",
+                "SELECT DNI, NOMBRE FROM padron_docentes WHERE DEPARTAMENTO = %s",
                 conn, params=[origen])
 
     def estructura_tc(self, origen: str) -> pd.DataFrame:
@@ -190,7 +188,7 @@ class RepositorioSQL:
         # Cuando se cree (p. ej. CECO_CONCEPTO_TC con columnas CODIGO_CECO,
         # DESCRIPCION_CECO, CONCEPTO, DEPARTAMENTO), reemplazar por algo como:
         #   SELECT CODIGO_CECO, DESCRIPCION_CECO, CONCEPTO
-        #   FROM CECO_CONCEPTO_TC WHERE DEPARTAMENTO = ?
+        #   FROM CECO_CONCEPTO_TC WHERE DEPARTAMENTO = %s
         raise NotImplementedError(
             "estructura_tc: falta la tabla maestra CECO->concepto en SQL.")
 
@@ -198,18 +196,17 @@ class RepositorioSQL:
                 sps: list[tuple]) -> int:
         """DELETE + INSERT parametrizado + EXEC, en una sola transacción.
         Si algo falla, rollback: nunca quedan datos borrados a medio cargar."""
-        placeholders = ", ".join(["?"] * len(cols))
+        placeholders = ", ".join(["%s"] * len(cols))
         sql_insert = f"INSERT INTO DATOS_ENTRADA ({', '.join(cols)}) VALUES ({placeholders})"
-        sql_delete = "DELETE FROM DATOS_ENTRADA WHERE HOJA_ORIGEN = ? AND ORIGEN = ?"
+        sql_delete = "DELETE FROM DATOS_ENTRADA WHERE HOJA_ORIGEN = %s AND ORIGEN = %s"
         with self._conn() as conn:
             cur = conn.cursor()
             try:
                 cur.execute(sql_delete, [hoja, origen])
-                cur.fast_executemany = True
                 cur.executemany(sql_insert, filas)
                 for sp, lleva_origen in sps:
                     if lleva_origen:
-                        cur.execute(f"EXEC {sp} @OrigenEntrada = ?", [origen])
+                        cur.execute(f"EXEC {sp} @OrigenEntrada = %s", [origen])
                     else:
                         cur.execute(f"EXEC {sp}")
                 conn.commit()

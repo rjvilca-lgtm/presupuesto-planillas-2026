@@ -1,3 +1,4 @@
 streamlit>=1.36
 pandas>=2.0
-pyodbc>=5.0
+python-tds>=1.15
+cryptography>=42.0

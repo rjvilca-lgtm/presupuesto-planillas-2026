@@ -47,7 +47,8 @@ no escribe en ninguna base). Es el modo pensado para revisar la experiencia.
    macros: rótala.**
 2. Copia `.streamlit/secrets.toml.example` a `.streamlit/secrets.toml` y
    completa la sección `[sql]`.
-3. Requiere el **ODBC Driver 18 for SQL Server** en la máquina/host.
+3. `RepositorioSQL` usa `python-tds` (driver 100% Python, sin dependencias
+   de sistema) — no requiere instalar ningún driver ODBC en la máquina/host.
 4. Los catálogos (`cc`, `direccion`, `tarifas_2026`, `padron_docentes`) deben
    existir en SQL. Ajusta los nombres reales en `src/repositorio.py`.
 
@@ -58,12 +59,11 @@ no escribe en ninguna base). Es el modo pensado para revisar la experiencia.
 3. Sin secrets, la app queda pública en modo demostración.
 4. Para producción, pega el contenido de `secrets.toml` en
    **Settings → Secrets**.
-5. `packages.txt` ya instala `unixodbc` + `tdsodbc` (FreeTDS), el driver ODBC
-   que sí se puede instalar en Community Cloud (el "ODBC Driver 18 for SQL
-   Server" de Microsoft exige su propio repo APT, que ahí no se puede
-   agregar). `RepositorioSQL` lo usa por defecto; no hace falta tocar nada
-   salvo que corras en un host propio con el driver de Microsoft instalado
-   (ver `driver` en `secrets.toml.example`).
+5. No hace falta `packages.txt`: `python-tds` es puro Python (vía pip), así
+   que evita los problemas de instalar un driver ODBC en Community Cloud
+   (el "ODBC Driver 18 for SQL Server" de Microsoft exige su propio repo
+   APT que ahí no se puede agregar; FreeTDS vía apt choca con el unixODBC
+   que ya trae la imagen).
 6. En Azure SQL, habilita el firewall para que Community Cloud pueda
    conectarse: **Networking → Firewall rules**. No publica IPs fijas de
    salida, así que para probar conviene permitir temporalmente todo el rango
