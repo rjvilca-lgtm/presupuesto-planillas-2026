@@ -13,6 +13,8 @@ La interfaz es idéntica, así que la interfaz de usuario no distingue el modo.
 
 from __future__ import annotations
 
+import concurrent.futures
+import time
 from contextlib import contextmanager
 
 import pandas as pd
@@ -124,6 +126,43 @@ class RepositorioDemo:
         return len(filas)
 
 
+# TIMEOUT_CONEXION: segundos que se espera a pytds antes de cortar a la
+# fuerza. pytds no siempre respeta su propio login_timeout durante el
+# handshake TLS; si la red lo bloquea en silencio (firewall que descarta
+# en vez de rechazar), la app se queda colgada sin ningún error visible.
+# Se corre pytds.connect() en un hilo aparte para poder darle un límite
+# duro, e imprime cada paso a stdout para que quede en los logs de Cloud.
+TIMEOUT_CONEXION = 15
+
+
+def _conectar_con_timeout(server, port, database, user, password):
+    import pytds
+
+    def _intentar():
+        print(f"[sql] conectando a {server}:{port}/{database}...", flush=True)
+        t0 = time.time()
+        conn = pytds.connect(
+            server=server, port=port, database=database,
+            user=user, password=password,
+            autocommit=False, login_timeout=TIMEOUT_CONEXION,
+        )
+        print(f"[sql] conectado en {time.time() - t0:.1f}s", flush=True)
+        return conn
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        futuro = ex.submit(_intentar)
+        try:
+            return futuro.result(timeout=TIMEOUT_CONEXION + 5)
+        except concurrent.futures.TimeoutError:
+            print(f"[sql] TIMEOUT forzado tras {TIMEOUT_CONEXION + 5}s: pytds no "
+                  "respondió (bloqueo de red a nivel de conexión/TLS, no error "
+                  "de login).", flush=True)
+            raise TimeoutError(
+                f"No se pudo conectar a {server}:{port} en "
+                f"{TIMEOUT_CONEXION + 5}s. La conexión se quedó colgada sin "
+                "responder (probable bloqueo de red, no credenciales).")
+
+
 class RepositorioSQL:
     """Producción sobre Azure SQL. Requiere secrets['sql'].
 
@@ -148,12 +187,9 @@ class RepositorioSQL:
 
     @contextmanager
     def _conn(self):
-        import pytds
-        conn = pytds.connect(
-            server=self._server, port=self._port, database=self._database,
-            user=self._user, password=self._password,
-            autocommit=False, login_timeout=30,  # transacción manual
-        )
+        conn = _conectar_con_timeout(
+            self._server, self._port, self._database,
+            self._user, self._password)
         try:
             yield conn
         finally:
@@ -221,9 +257,12 @@ def crear_repositorio():
     """Devuelve el repositorio adecuado. Sin secrets de SQL → modo demo."""
     try:
         if "sql" in st.secrets:
+            print("[sql] secrets['sql'] encontrado, modo SQL (no conecta todavía; "
+                  "la conexión real se abre en el primer query)", flush=True)
             return RepositorioSQL(st.secrets)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[sql] error leyendo secrets, cae a modo demo: {e!r}", flush=True)
+    print("[sql] sin secrets['sql'], modo demo", flush=True)
     return RepositorioDemo()
 
 
