@@ -49,9 +49,16 @@ SEMESTRES = {
     "II semestre (Jul-Dic)": MESES[6:],
 }
 
+# Ejercicio presupuestal: va en DATOS_ENTRADA.PRESUPUESTO en cada fila que
+# escribe la app, y acota el DELETE previo a la carga (las filas del Excel
+# 2026 tienen PRESUPUESTO NULL y no se tocan). Los sp_*_2027 deben leer solo
+# las filas de este PRESUPUESTO.
+PRESUPUESTO = "PPTO2027"
+
 # Todas las columnas posibles de DATOS_ENTRADA (unión de las 7 macros).
 COLS_DESTINO = ["HOJA_ORIGEN", "ORIGEN", "DNI", "NOMBRE", "CENTRO_COSTO",
-                "CONCEPTO", "CONCEPTO_2", "TIPO", "MES", "HORAS", "IMPORTE", "TARIFA"]
+                "CONCEPTO", "CONCEPTO_2", "TIPO", "MES", "HORAS", "IMPORTE", "TARIFA",
+                "PRESUPUESTO"]
 
 PLANILLAS = {
     "1. Plan TC-I": {
@@ -61,8 +68,8 @@ PLANILLAS = {
         "tarifa": "server",
         "usa_roster": True,
         "mes_carga": "MARZO",
-        "sps": [("sp_ValorizarPlanilla_Total_2026", True),
-                ("sp_Valorizar_CargaAcademica_2026", False)],
+        "sps": [("sp_ValorizarPlanilla_Total_2027", True),
+                ("sp_Valorizar_CargaAcademica_2027", False)],
         "ayuda": "Registra las horas de cada docente por centro de costo. "
                  "El importe se calcula al valorizar.",
     },
@@ -73,8 +80,8 @@ PLANILLAS = {
         "tarifa": "server",
         "usa_roster": True,
         "mes_carga": "AGOSTO",
-        "sps": [("sp_ValorizarPlanilla_Total_2026", True),
-                ("sp_Valorizar_CargaAcademica_2026", False)],
+        "sps": [("sp_ValorizarPlanilla_Total_2027", True),
+                ("sp_Valorizar_CargaAcademica_2027", False)],
         "ayuda": "Registra las horas de cada docente por centro de costo. "
                  "El importe se calcula al valorizar.",
     },
@@ -85,7 +92,7 @@ PLANILLAS = {
         "tarifa": "catalogo",
         "catalogo_key": "TIPO",
         "usa_roster": False,
-        "sps": [("sp_Valorizar_HorasAdicionales_2026", True)],
+        "sps": [("sp_Valorizar_HorasAdicionales_2027", True)],
         "ayuda": "Elige el tipo (Asistente, Jefe de práctica, Titular) y la "
                  "tarifa se aplica sola desde el catálogo.",
     },
@@ -95,7 +102,7 @@ PLANILLAS = {
         "dimensiones": ["CONCEPTO", "CONCEPTO_2", "CENTRO_COSTO", "TIPO", "MES"],
         "tarifa": None,
         "usa_roster": False,
-        "sps": [("sp_Valorizar_Postgrado_2026", True)],
+        "sps": [("sp_Valorizar_Postgrado_2027", True)],
         "ayuda": "Ingresa el importe presupuestado por programa y mes.",
     },
     "Investigacion": {
@@ -104,7 +111,7 @@ PLANILLAS = {
         "dimensiones": ["CONCEPTO", "CONCEPTO_2", "CENTRO_COSTO", "MES"],
         "tarifa": None,
         "usa_roster": False,
-        "sps": [("sp_Valorizar_Investigacion_2026", True)],
+        "sps": [("sp_Valorizar_Investigacion_2027", True)],
         "ayuda": "Ingresa el importe presupuestado por línea y mes.",
     },
     "Ayudantias": {
@@ -115,7 +122,7 @@ PLANILLAS = {
         "tarifa": "catalogo",
         "catalogo_key": "TIPO",
         "usa_roster": False,
-        "sps": [("sp_Valorizar_Ayudantias_2026", True)],
+        "sps": [("sp_Valorizar_Ayudantias_2027", True)],
         "ayuda": "Registra las horas de ayudantía. El costo por hora se aplica "
                  "desde el catálogo.",
     },

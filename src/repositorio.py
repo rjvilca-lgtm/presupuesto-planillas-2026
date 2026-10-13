@@ -20,7 +20,7 @@ from contextlib import contextmanager
 import pandas as pd
 import streamlit as st
 
-from .config import cfg_de
+from .config import PRESUPUESTO, cfg_de
 
 
 # ---------------------------------------------------------------------
@@ -277,14 +277,16 @@ class RepositorioSQL:
     def guardar(self, hoja: str, origen: str, filas: list[list], cols: list[str],
                 sps: list[tuple]) -> int:
         """DELETE + INSERT parametrizado + EXEC, en una sola transacción.
+        El DELETE solo alcanza las filas del PRESUPUESTO de la app.
         Si algo falla, rollback: nunca quedan datos borrados a medio cargar."""
         placeholders = ", ".join(["%s"] * len(cols))
         sql_insert = f"INSERT INTO DATOS_ENTRADA ({', '.join(cols)}) VALUES ({placeholders})"
-        sql_delete = "DELETE FROM DATOS_ENTRADA WHERE HOJA_ORIGEN = %s AND ORIGEN = %s"
+        sql_delete = ("DELETE FROM DATOS_ENTRADA "
+                      "WHERE HOJA_ORIGEN = %s AND ORIGEN = %s AND PRESUPUESTO = %s")
         with self._conn() as conn:
             cur = conn.cursor()
             try:
-                cur.execute(sql_delete, [hoja, origen])
+                cur.execute(sql_delete, [hoja, origen, PRESUPUESTO])
                 cur.executemany(sql_insert, filas)
                 for sp, lleva_origen in sps:
                     if lleva_origen:
@@ -331,7 +333,7 @@ def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list
     largo = largo[largo[metrica] > 0]              # solo celdas con valor
     largo["MES"] = largo["MES"].map(lambda m: str(MESES.index(m) + 1))
 
-    cols = ["HOJA_ORIGEN", "ORIGEN"] + cfg["dimensiones"] + [destino]
+    cols = ["PRESUPUESTO", "HOJA_ORIGEN", "ORIGEN"] + cfg["dimensiones"] + [destino]
     tarifas = {}
     if cfg["tarifa"] == "catalogo":
         cols.append("TARIFA")
@@ -339,7 +341,7 @@ def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list
 
     filas = []
     for _, r in largo.iterrows():
-        reg = {"HOJA_ORIGEN": hoja, "ORIGEN": origen}
+        reg = {"PRESUPUESTO": PRESUPUESTO, "HOJA_ORIGEN": hoja, "ORIGEN": origen}
         for dim in cfg["dimensiones"]:               # incluye MES
             reg[dim] = r[dim]
         reg[destino] = float(r[metrica])
