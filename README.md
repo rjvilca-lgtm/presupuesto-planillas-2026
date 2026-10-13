@@ -25,6 +25,7 @@ src/config.py           Config declarativa de las 7 planillas (el "7 → 1")
 src/repositorio.py      Capa de datos: RepositorioSQL (prod) y RepositorioDemo
 src/validacion.py       Reglas de validación y formato, derivadas de la config
 src/vistas.py           Componentes de interfaz
+sql/                    Scripts de base de datos (ejecutar en Azure SQL)
 .streamlit/config.toml  Tema
 .streamlit/secrets.toml.example   Plantilla de credenciales (no subir el real)
 ```
@@ -51,6 +52,10 @@ no escribe en ninguna base). Es el modo pensado para revisar la experiencia.
    de sistema) — no requiere instalar ningún driver ODBC en la máquina/host.
 4. Los catálogos (`Departamentos`, `CENTROS_COSTOS`, `tarifas_2027`, `HORAS_DOCENTES`) deben
    existir en SQL. Ajusta los nombres reales en `src/repositorio.py`.
+
+5. Ejecuta `sql/crear_ceco_concepto_tc.sql` (Query editor de Azure o SSMS)
+   para crear la tabla maestra de la ficha TC. Sin ella, la app deriva la
+   estructura de las cargas TC existentes en `DATOS_ENTRADA`.
 
 ## Desplegar en Streamlit Community Cloud
 

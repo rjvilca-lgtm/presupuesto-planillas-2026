@@ -244,13 +244,24 @@ class RepositorioSQL:
             "ORDER BY NOMBRE", (origen,))
 
     def estructura_tc(self, origen: str) -> pd.DataFrame:
-        """CECO -> conceptos de la ficha TC, derivado de las cargas TC que ya
-        existen en DATOS_ENTRADA para el departamento (las tres hojas que
-        procesa sp_ValorizarPlanilla_Total_2026). Puede incluir CECOs de otros
-        departamentos (docentes transversales).
-        TODO: reemplazar por una tabla maestra (p. ej. CECO_CONCEPTO_TC): al
-        guardar, la app solo inserta conceptos con horas > 0, así que un
-        concepto que nadie use en ninguna hoja TC desaparece de la estructura."""
+        """CECO -> conceptos de la ficha TC para el departamento.
+
+        Fuente: la tabla maestra CECO_CONCEPTO_TC (sql/crear_ceco_concepto_tc.sql).
+        Mientras no exista, se deriva de las cargas TC que ya hay en
+        DATOS_ENTRADA (las tres hojas que procesa sp_ValorizarPlanilla_Total_2026),
+        con la limitación de que un concepto guardado con 0 horas en todas las
+        hojas TC deja de aparecer. Puede incluir CECOs de otros departamentos
+        (docentes transversales)."""
+        existe = self._leer("SELECT OBJECT_ID('dbo.CECO_CONCEPTO_TC', 'U') AS ID")
+        if existe["ID"].iloc[0] is not None:
+            return self._leer(
+                "SELECT t.CENTRO_COSTO AS CODIGO_CECO, "
+                "COALESCE(c.DESCRIPCION_CC, t.CENTRO_COSTO) AS DESCRIPCION_CECO, "
+                "t.CONCEPTO "
+                "FROM CECO_CONCEPTO_TC t "
+                "LEFT JOIN CENTROS_COSTOS c ON c.CENTRO_COSTO = t.CENTRO_COSTO "
+                "WHERE t.DEPARTAMENTO = %s AND t.ACTIVO = 1 "
+                "ORDER BY t.CENTRO_COSTO, t.CONCEPTO", (origen,))
         return self._leer(
             "SELECT DISTINCT LTRIM(RTRIM(de.CENTRO_COSTO)) AS CODIGO_CECO, "
             "COALESCE(c.DESCRIPCION_CC, LTRIM(RTRIM(de.CENTRO_COSTO))) AS DESCRIPCION_CECO, "
