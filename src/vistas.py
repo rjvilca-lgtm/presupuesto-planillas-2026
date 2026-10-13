@@ -11,6 +11,9 @@ Foco de experiencia:
   - El monto presupuestado reacciona mientras se teclea.
 """
 
+import re
+from html import escape
+
 import pandas as pd
 import streamlit as st
 
@@ -97,6 +100,9 @@ def inyectar_estilos():
     st.markdown(CSS, unsafe_allow_html=True)
 
 
+# DNI (8 dígitos) o carné de extranjería (9-12 alfanuméricos).
+_DOC_IDENTIDAD = re.compile(r"\d{8}|[0-9A-Za-z]{9,12}")
+
 TC_HOJAS = ["1. Plan TC-I", "Plan TC-II"]
 
 
@@ -161,8 +167,7 @@ def _semilla(cfg: dict, roster: pd.DataFrame) -> pd.DataFrame:
 
 def _semestre_activo(hoja: str) -> str:
     """Selector de semestre: reduce a 6 las columnas de mes visibles.
-    Los 6 meses del semestre oculto se conservan aparte (ver grilla())
-    para que el guardado siga derritiendo los 12 meses."""
+    Los 12 meses siguen en los datos del editor (ver grilla())."""
     opciones = list(SEMESTRES)
     key = f"semestre_{hoja}"
     if hasattr(st, "segmented_control"):
@@ -171,36 +176,24 @@ def _semestre_activo(hoja: str) -> str:
     return st.radio("Semestre", opciones, horizontal=True, key=key)
 
 
-def _fusionar_semestre(dims: list[str], meses_ocultos: list[str],
-                        estado_previo: pd.DataFrame,
-                        editado_vista: pd.DataFrame) -> pd.DataFrame:
-    """Recompone el DataFrame de 12 meses tras editar solo 6.
-    Empareja filas por sus dimensiones (identifican el registro, ver
-    config.py) para recuperar los meses del semestre oculto; filas nuevas
-    quedan en NaN en el semestre oculto (nada que perder todavía) y filas
-    eliminadas en la vista se eliminan también del otro semestre."""
-    otros = estado_previo[dims + meses_ocultos] if not estado_previo.empty \
-        else pd.DataFrame(columns=dims + meses_ocultos)
-    fusion = editado_vista.merge(otros, on=dims, how="left")
-    for m in meses_ocultos:
-        if m not in fusion.columns:
-            fusion[m] = pd.Series(dtype="float64")
-    return fusion[dims + MESES]
-
-
 def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
            tarifas: dict, origen: str) -> pd.DataFrame:
     """data_editor matricial: dimensiones a la izquierda, 12 meses a la derecha
     (solo se muestran los 6 del semestre elegido para reducir el scroll).
-    El DataFrame completo de 12 meses se mantiene en session_state, así que
-    cambiar de semestre no descarta lo tecleado en el otro."""
+
+    El editor recibe siempre la MISMA base mientras se edita: con
+    num_rows="dynamic" la identidad del widget depende de los datos, así que
+    devolverle su propia salida lo reinicia y pierde ediciones. La base solo
+    se renueva (con lo último editado) al cambiar de semestre. Los 12 meses
+    viajan en los datos y column_order oculta los 6 del otro semestre, así que
+    no hace falta emparejar filas entre semestres."""
+    hoja = cfg["_hoja"]
     ccos_opts = ccos["CODIGO_CECO"].tolist()
     dims = dims_fila(cfg)
     metrica = cfg["metrica"]
     unidad = "horas" if metrica == "HORAS" else "importe (S/)"
-    semestre = _semestre_activo(cfg["_hoja"])
+    semestre = _semestre_activo(hoja)
     meses_visibles = SEMESTRES[semestre]
-    meses_ocultos = [m for m in MESES if m not in meses_visibles]
 
     colcfg = {
         "DNI": st.column_config.TextColumn("DNI", disabled=cfg["usa_roster"]),
@@ -227,26 +220,29 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
                "Puedes pegar un bloque de celdas copiado desde Excel. "
                "Los datos del otro semestre no se pierden al cambiar de vista.")
 
-    estado_key = f"_estado_{cfg['_hoja']}_{origen}"
-    if estado_key not in st.session_state:
-        st.session_state[estado_key] = _semilla(cfg, roster)
-    estado_previo = st.session_state[estado_key]
+    base_key = f"_base_{hoja}_{origen}"
+    ultimo_key = f"_ultimo_{hoja}_{origen}"
+    sem_key = f"_sem_base_{hoja}_{origen}"
+    if base_key not in st.session_state:
+        st.session_state[base_key] = _semilla(cfg, roster)
+        st.session_state[ultimo_key] = st.session_state[base_key]
+        st.session_state[sem_key] = semestre
+    elif st.session_state[sem_key] != semestre:
+        st.session_state[base_key] = st.session_state[ultimo_key].reset_index(drop=True)
+        st.session_state[sem_key] = semestre
 
-    vista_cols = dims + meses_visibles
-    vista = estado_previo[vista_cols].copy()
-    editado_vista = st.data_editor(
-        vista, num_rows="dynamic", use_container_width=True, hide_index=True,
-        column_config={k: colcfg[k] for k in vista_cols if k in colcfg},
-        key=f"grilla_{cfg['_hoja']}_{semestre}",
+    editado = st.data_editor(
+        st.session_state[base_key], num_rows="dynamic", width="stretch",
+        hide_index=True, column_order=dims + meses_visibles,
+        column_config={k: v for k, v in colcfg.items() if k in dims + MESES},
+        key=f"grilla_{hoja}_{origen}_{semestre}",
     )
-
-    editado = _fusionar_semestre(dims, meses_ocultos, estado_previo, editado_vista)
-    st.session_state[estado_key] = editado
+    st.session_state[ultimo_key] = editado
 
     with st.expander("Ver descripción de los centros de costo"):
         st.dataframe(ccos.rename(columns={"CODIGO_CECO": "Código",
                                           "DESCRIPCION_CECO": "Descripción"}),
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width="stretch")
     return editado
 
 
@@ -319,6 +315,10 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                     if not dni_limpio or not nuevo_nombre.strip():
                         st.error("Ingresa DNI y nombre para agregar al docente.",
                                 icon="⚠️")
+                    elif not _DOC_IDENTIDAD.fullmatch(dni_limpio):
+                        st.error("El DNI debe tener 8 dígitos (o 9 a 12 caracteres "
+                                 "alfanuméricos si es carné de extranjería).",
+                                 icon="⚠️")
                     elif dni_limpio in set(ledger["DNI"]):
                         st.error("Ese DNI ya está en la ficha.", icon="⚠️")
                     else:
@@ -340,7 +340,7 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
             with st.container(key=f"docitem_{estado_key}_{dni_d}"):
                 if st.button(f"{nombre_d}  \nDNI {dni_d} · {h:,.1f} h/mes",
                             key=f"docsel_{estado_key}_{dni_d}",
-                            use_container_width=True,
+                            width="stretch",
                             type="primary" if activo else "secondary"):
                     st.session_state[activo_key] = dni_d
                     st.rerun()
@@ -358,14 +358,14 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
             nonlocal total_docente
             with st.container(border=True, key=f"ceco_{estado_key}_{dni_sel}_{ceco}"):
                 st.markdown(
-                    f'<div class="ceco-card-header">{desc_ceco.get(ceco, ceco)}'
-                    f'<span class="codigo-ceco">{ceco}</span></div>',
+                    f'<div class="ceco-card-header">{escape(str(desc_ceco.get(ceco, ceco)))}'
+                    f'<span class="codigo-ceco">{escape(str(ceco))}</span></div>',
                     unsafe_allow_html=True,
                 )
                 for idx, fila in grupo.iterrows():
                     c_label, c_input = st.columns([3, 2])
                     c_label.markdown(
-                        f'<div class="actividad-label">{fila["CONCEPTO"]}</div>',
+                        f'<div class="actividad-label">{escape(str(fila["CONCEPTO"]))}</div>',
                         unsafe_allow_html=True)
                     key = f"h_{estado_key}_{dni_sel}_{ceco}_{fila['CONCEPTO']}"
                     valor = c_input.number_input(
@@ -390,8 +390,8 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
             st.markdown(
                 f"""<div class="detail-head">
                       <div>
-                        <div class="nombre">{nombre_sel}</div>
-                        <div class="dni">DNI {dni_sel}</div>
+                        <div class="nombre">{escape(str(nombre_sel))}</div>
+                        <div class="dni">DNI {escape(str(dni_sel))}</div>
                       </div>
                       <div class="total">
                         <div class="numero">{total_docente:,.1f}</div>
@@ -449,4 +449,4 @@ def resumen_por_ceco(hoja: str, df: pd.DataFrame):
     resumen = tmp.groupby("CENTRO_COSTO")["_total"].sum().reset_index()
     etiqueta = "Horas" if cfg["metrica"] == "HORAS" else "Importe (S/)"
     resumen.columns = ["Centro de costo", etiqueta]
-    st.dataframe(resumen, hide_index=True, use_container_width=True)
+    st.dataframe(resumen, hide_index=True, width="stretch")

@@ -41,7 +41,13 @@ def main():
     if seleccion == "TC":
         st.caption(cfg_de(TC_HOJAS[0])["ayuda"])
         roster = repo.roster(origen)
-        estructura = repo.estructura_tc(origen)
+        try:
+            estructura = repo.estructura_tc(origen)
+        except NotImplementedError:
+            st.warning("El plan de trabajo TC aún no está disponible: falta en la "
+                       "base la tabla que define qué conceptos van en cada centro "
+                       "de costo. Elige otra planilla.", icon="🚧")
+            return
         pestañas = st.tabs(["I semestre (Ene-Jun)", "II semestre (Jul-Dic)"])
         for hoja, tab in zip(TC_HOJAS, pestañas):
             with tab:
@@ -81,10 +87,11 @@ def _renderizar_ficha_tc(repo, hoja, cfg, ccos, roster, estructura, tarifas, ori
     with st.container(key=f"barra_guardar_{hoja}"):
         c_info, c_btn = st.columns([3, 1])
         c_info.markdown(
-            f'<div class="bottom-info">{cfg["etiqueta"]} · {len(roster)} docente(s)</div>',
+            f'<div class="bottom-info">{cfg["etiqueta"]} · '
+            f'{editado["DNI"].nunique()} docente(s)</div>',
             unsafe_allow_html=True)
         clic_guardar = c_btn.button("Guardar cambios", type="primary",
-                                    use_container_width=True, key=f"btn_guardar_{hoja}")
+                                    width="stretch", key=f"btn_guardar_{hoja}")
     if clic_guardar:
         errores = validar(hoja, editado, ccos_validos, tarifas)
         if errores:
@@ -102,10 +109,10 @@ def _renderizar_ficha_tc(repo, hoja, cfg, ccos, roster, estructura, tarifas, ori
                        "planilla para este departamento y se ejecuta la valorización.")
             c1, c2 = st.columns(2)
             if c1.button("Confirmar y valorizar", type="primary",
-                         use_container_width=True, key=f"btn_conf_{hoja}"):
+                         width="stretch", key=f"btn_conf_{hoja}"):
                 guardar(repo, hoja, origen, editado)
                 st.session_state[listo_key] = False
-            if c2.button("Cancelar", use_container_width=True,
+            if c2.button("Cancelar", width="stretch",
                          key=f"btn_cancel_{hoja}"):
                 st.session_state[listo_key] = False
                 st.rerun()
@@ -126,7 +133,7 @@ def _renderizar_grilla(repo, hoja, cfg, ccos, roster, tarifas, origen):
     st.divider()
     listo_key = f"_listo_{hoja}"
     ccos_validos = set(ccos["CODIGO_CECO"])
-    if st.button("Revisar y guardar", type="primary", use_container_width=True,
+    if st.button("Revisar y guardar", type="primary", width="stretch",
                 key=f"btn_guardar_{hoja}"):
         errores = validar(hoja, editado, ccos_validos, tarifas)
         if errores:
@@ -144,10 +151,10 @@ def _renderizar_grilla(repo, hoja, cfg, ccos, roster, tarifas, origen):
                        "planilla para este departamento y se ejecuta la valorización.")
             c1, c2 = st.columns(2)
             if c1.button("Confirmar y valorizar", type="primary",
-                         use_container_width=True, key=f"btn_conf_{hoja}"):
+                         width="stretch", key=f"btn_conf_{hoja}"):
                 guardar(repo, hoja, origen, editado)
                 st.session_state[listo_key] = False
-            if c2.button("Cancelar", use_container_width=True,
+            if c2.button("Cancelar", width="stretch",
                          key=f"btn_cancel_{hoja}"):
                 st.session_state[listo_key] = False
                 st.rerun()

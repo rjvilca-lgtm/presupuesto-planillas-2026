@@ -169,6 +169,22 @@ def _conectar_con_timeout(server, port, database, user, password):
                 "responder (probable bloqueo de red, no credenciales).")
 
 
+# Los catálogos casi no cambian durante una sesión y Streamlit re-ejecuta el
+# script en cada interacción: sin caché, cada tecla abriría varias conexiones
+# TLS nuevas a Azure. Se cachean por 10 minutos (por consulta + parámetros).
+@st.cache_data(ttl=600, show_spinner=False)
+def _leer_cacheado(server, port, database, user, password,
+                   sql: str, params: tuple) -> pd.DataFrame:
+    conn = _conectar_con_timeout(server, port, database, user, password)
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, list(params))
+        columnas = [d[0] for d in cur.description]
+        return pd.DataFrame(cur.fetchall(), columns=columnas)
+    finally:
+        conn.close()
+
+
 class RepositorioSQL:
     """Producción sobre Azure SQL. Requiere secrets['sql'].
 
@@ -201,33 +217,31 @@ class RepositorioSQL:
         finally:
             conn.close()
 
+    def _leer(self, sql: str, params: tuple = ()) -> pd.DataFrame:
+        return _leer_cacheado(self._server, self._port, self._database,
+                              self._user, self._password, sql, params)
+
     def departamentos(self):
-        with self._conn() as conn:
-            df = pd.read_sql("SELECT CODIGO, DESCRIPCION FROM Departamentos", conn)
+        df = self._leer("SELECT CODIGO, DESCRIPCION FROM Departamentos ORDER BY CODIGO")
         return list(df.itertuples(index=False, name=None))
 
     def centros_costo(self, origen: str) -> pd.DataFrame:
-        with self._conn() as conn:
-            return pd.read_sql(
-                # CENTROS_COSTOS.DEPARTAMENTO guarda la descripción del
-                # departamento, no el código: se cruza vía Departamentos.
-                "SELECT c.CENTRO_COSTO AS CODIGO_CECO, c.DESCRIPCION_CC AS DESCRIPCION_CECO "
-                "FROM CENTROS_COSTOS c JOIN Departamentos d ON d.DESCRIPCION = c.DEPARTAMENTO "
-                "WHERE d.CODIGO = %s ORDER BY c.CENTRO_COSTO",
-                conn, params=[origen])
+        # CENTROS_COSTOS.DEPARTAMENTO guarda la descripción del departamento,
+        # no el código: se cruza vía Departamentos.
+        return self._leer(
+            "SELECT c.CENTRO_COSTO AS CODIGO_CECO, c.DESCRIPCION_CC AS DESCRIPCION_CECO "
+            "FROM CENTROS_COSTOS c JOIN Departamentos d ON d.DESCRIPCION = c.DEPARTAMENTO "
+            "WHERE d.CODIGO = %s ORDER BY c.CENTRO_COSTO", (origen,))
 
     def tarifas(self, hoja: str) -> dict:
-        with self._conn() as conn:
-            df = pd.read_sql(
-                "SELECT TIPO, TARIFA FROM tarifas_2027 WHERE HOJA_ORIGEN = %s",
-                conn, params=[hoja])
-        return dict(zip(df["TIPO"], df["TARIFA"]))
+        df = self._leer("SELECT TIPO, TARIFA FROM tarifas_2027 WHERE HOJA_ORIGEN = %s",
+                        (hoja,))
+        return {t: float(v) for t, v in zip(df["TIPO"], df["TARIFA"])}
 
     def roster(self, origen: str) -> pd.DataFrame:
-        with self._conn() as conn:
-            return pd.read_sql(
-                "SELECT DISTINCT DNI, NOMBRE FROM HORAS_DOCENTES WHERE DPTO = %s",
-                conn, params=[origen])
+        return self._leer(
+            "SELECT DISTINCT DNI, NOMBRE FROM HORAS_DOCENTES WHERE DPTO = %s "
+            "ORDER BY NOMBRE", (origen,))
 
     def estructura_tc(self, origen: str) -> pd.DataFrame:
         # TODO: todavía no existe una tabla maestra CECO -> conceptos en SQL.
