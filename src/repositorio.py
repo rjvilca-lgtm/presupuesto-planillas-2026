@@ -44,8 +44,8 @@ _CCOS_DEMO = {
 
 # Catálogo de tarifas por tipo (server-side; el usuario nunca lo teclea).
 _TARIFAS_DEMO = {
-    "Horas Adicionales": {"Asistente": 93.0, "Jefe de práctica": 98.0, "Titular": 140.65},
-    "Ayudantias": {"Pregrado": 4.5, "Postgrado": 6.0},
+    "Horas Adicionales": {"Titular": 152.0, "Jefe de practica": 105.0, "Asistente": 100.0},
+    "Ayudantias": {"Ayudantía": 4.5},
 }
 
 _ROSTER_DEMO = {
@@ -279,19 +279,23 @@ def crear_repositorio():
 def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list, list]:
     """Derrite la matriz (meses en columnas) a formato largo para DATOS_ENTRADA:
     un registro por cada celda mensual con valor > 0. Aplica la tarifa desde el
-    catálogo (server-side) cuando corresponde; el usuario nunca la teclea."""
+    catálogo (server-side) cuando corresponde; el usuario nunca la teclea.
+    MES sale como número ("1".."12") y la métrica cae en cfg["columna_destino"]
+    si está definida (ver config.py)."""
     from .config import MESES, dims_fila
     cfg = cfg_de(hoja)
     dims = dims_fila(cfg)
     metrica = cfg["metrica"]
+    destino = cfg.get("columna_destino", metrica)
     meses = [m for m in MESES if m in df.columns]
 
     largo = df.melt(id_vars=dims, value_vars=meses,
                     var_name="MES", value_name=metrica)
     largo[metrica] = pd.to_numeric(largo[metrica], errors="coerce").fillna(0.0)
     largo = largo[largo[metrica] > 0]              # solo celdas con valor
+    largo["MES"] = largo["MES"].map(lambda m: str(MESES.index(m) + 1))
 
-    cols = ["HOJA_ORIGEN", "ORIGEN"] + cfg["dimensiones"] + [metrica]
+    cols = ["HOJA_ORIGEN", "ORIGEN"] + cfg["dimensiones"] + [destino]
     tarifas = {}
     if cfg["tarifa"] == "catalogo":
         cols.append("TARIFA")
@@ -302,7 +306,7 @@ def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list
         reg = {"HOJA_ORIGEN": hoja, "ORIGEN": origen}
         for dim in cfg["dimensiones"]:               # incluye MES
             reg[dim] = r[dim]
-        reg[metrica] = float(r[metrica])
+        reg[destino] = float(r[metrica])
         if cfg["tarifa"] == "catalogo":
             reg["TARIFA"] = float(tarifas[r[cfg["catalogo_key"]]])
         filas.append([reg[c] for c in cols])

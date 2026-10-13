@@ -264,10 +264,10 @@ def _semilla_ficha(roster: pd.DataFrame, estructura: pd.DataFrame) -> pd.DataFra
 def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                    roster: pd.DataFrame, origen: str) -> pd.DataFrame:
     """Ficha por docente para las planillas TC: un valor de horas por
-    (CECO, concepto), por semestre (no por mes). Devuelve un DataFrame con
-    la misma forma que grilla() (dims_fila(cfg) + MESES) para que
-    preparar_filas() no cambie: el valor único se replica en los 6 meses
-    del semestre de cfg["semestre"] y queda en 0 en el otro semestre.
+    (CECO, concepto): horas por mes, iguales todo el semestre. Devuelve un
+    DataFrame con la misma forma que grilla() (dims_fila(cfg) + MESES) para
+    que preparar_filas() no cambie: el valor va solo en cfg["mes_carga"]
+    (MARZO / AGOSTO) y el sp de valorización lo replica al resto del semestre.
 
     Layout maestro-detalle: lista de docentes a la izquierda, ficha del
     docente activo (centros de costo en grilla de 2 columnas) a la derecha.
@@ -338,7 +338,7 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
             h = horas_por_docente.get(dni_d, 0.0)
             activo = dni_d == st.session_state[activo_key]
             with st.container(key=f"docitem_{estado_key}_{dni_d}"):
-                if st.button(f"{nombre_d}  \nDNI {dni_d} · {h:,.1f} h",
+                if st.button(f"{nombre_d}  \nDNI {dni_d} · {h:,.1f} h/mes",
                             key=f"docsel_{estado_key}_{dni_d}",
                             use_container_width=True,
                             type="primary" if activo else "secondary"):
@@ -395,7 +395,7 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                       </div>
                       <div class="total">
                         <div class="numero">{total_docente:,.1f}</div>
-                        <div class="etiqueta">HORAS TOTALES</div>
+                        <div class="etiqueta">HORAS / MES</div>
                       </div>
                     </div>""",
                 unsafe_allow_html=True,
@@ -419,7 +419,7 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                   </div>
                   <div class="metric">
                     <div class="value">{horas_total:,.1f} h</div>
-                    <div class="label">Horas asignadas</div>
+                    <div class="label">Horas por mes asignadas</div>
                   </div>
                   <div class="progress-wrap">
                     <div class="progress-title">Progreso de carga · {pct * 100:.0f}%</div>
@@ -431,10 +431,9 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
             unsafe_allow_html=True,
         )
 
-    meses_semestre = SEMESTRES[cfg["semestre"]]
     salida = ledger.copy()
     for m in MESES:
-        salida[m] = salida["HORAS"] if m in meses_semestre else 0.0
+        salida[m] = salida["HORAS"] if m == cfg["mes_carga"] else 0.0
     return salida[dims + MESES]
 
 

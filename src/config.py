@@ -7,9 +7,10 @@ Agregar o cambiar una planilla = editar este diccionario.
 
 Campos:
   etiqueta     Nombre visible para el usuario (voz de la interfaz, no la técnica).
-  metrica      "HORAS" o "IMPORTE": qué teclea el usuario y en qué columna
-               de DATOS_ENTRADA cae. Resuelve que Ayudantías hoy meta horas
-               dentro de IMPORTE.
+  metrica      "HORAS" o "IMPORTE": qué teclea el usuario (y cómo se rotula).
+  columna_destino  Columna de DATOS_ENTRADA donde cae la métrica, si no es la
+               misma que `metrica`. Ayudantías teclea horas pero su sp las lee
+               de IMPORTE (las multiplica por 4.5).
   dimensiones  Columnas que identifican cada registro.
   tarifa       "server"   → la aplica el procedimiento; el usuario no la ve.
                "catalogo" → se resuelve por TIPO desde el catálogo (server-side);
@@ -20,12 +21,14 @@ Campos:
                departamento para que el usuario solo complete la métrica.
                También activa la ficha por docente (vistas.ficha_docente) en
                vez de la grilla matricial.
-  semestre     Solo para hojas con usa_roster=True: clave de SEMESTRES que
-               indica a qué 6 meses corresponde esta hoja (la ficha entra un
-               solo valor por CECO/concepto y lo replica en esos 6 meses).
+  mes_carga    Solo para hojas con usa_roster=True: mes en el que se carga el
+               valor único (horas por mes) de la ficha. sp_ValorizarPlanilla_
+               Total_2026 lo replica: MARZO (3) → meses 1-7, AGOSTO (8) → 8-12.
   sps          Procedimientos de valorización a ejecutar tras la carga, en orden.
                (nombre, pasa_OrigenEntrada)
-"ayuda": "Ingresa el importe presupuestado por programa y mes. (prueba de flujo)",
+
+MES se escribe en DATOS_ENTRADA como número ("1".."12"): PLANILLA.MES es int y
+varios sp (Postgrado, Ayudantías, CargaAcademica) hacen TRY_CAST(MES AS INT).
 """
 
 MESES = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO",
@@ -62,7 +65,7 @@ PLANILLAS = {
         "dimensiones": ["DNI", "NOMBRE", "CENTRO_COSTO", "CONCEPTO", "MES"],
         "tarifa": "server",
         "usa_roster": True,
-        "semestre": "I semestre (Ene-Jun)",
+        "mes_carga": "MARZO",
         "sps": [("sp_ValorizarPlanilla_Total_2026", True),
                 ("sp_Valorizar_CargaAcademica_2026", False)],
         "ayuda": "Registra las horas de cada docente por centro de costo. "
@@ -74,7 +77,7 @@ PLANILLAS = {
         "dimensiones": ["DNI", "NOMBRE", "CENTRO_COSTO", "CONCEPTO", "MES"],
         "tarifa": "server",
         "usa_roster": True,
-        "semestre": "II semestre (Jul-Dic)",
+        "mes_carga": "AGOSTO",
         "sps": [("sp_ValorizarPlanilla_Total_2026", True),
                 ("sp_Valorizar_CargaAcademica_2026", False)],
         "ayuda": "Registra las horas de cada docente por centro de costo. "
@@ -112,6 +115,7 @@ PLANILLAS = {
     "Ayudantias": {
         "etiqueta": "Ayudantías",
         "metrica": "HORAS",
+        "columna_destino": "IMPORTE",
         "dimensiones": ["CONCEPTO", "CONCEPTO_2", "CENTRO_COSTO", "TIPO", "MES"],
         "tarifa": "catalogo",
         "catalogo_key": "TIPO",
