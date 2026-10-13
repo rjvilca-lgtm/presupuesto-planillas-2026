@@ -3,4 +3,4 @@ pandas>=2.0
 python-tds>=1.15
 cryptography>=42.0
 certifi>=2024.0.0
-pyOpenSSL>=24.0
+pyOpenSSL>=24.0,<26  # 26 quitó X509.get_extension, que pytds usa para validar el host
