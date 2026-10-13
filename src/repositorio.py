@@ -244,13 +244,24 @@ class RepositorioSQL:
             "ORDER BY NOMBRE", (origen,))
 
     def estructura_tc(self, origen: str) -> pd.DataFrame:
-        # TODO: todavía no existe una tabla maestra CECO -> conceptos en SQL.
-        # Cuando se cree (p. ej. CECO_CONCEPTO_TC con columnas CODIGO_CECO,
-        # DESCRIPCION_CECO, CONCEPTO, DEPARTAMENTO), reemplazar por algo como:
-        #   SELECT CODIGO_CECO, DESCRIPCION_CECO, CONCEPTO
-        #   FROM CECO_CONCEPTO_TC WHERE DEPARTAMENTO = %s
-        raise NotImplementedError(
-            "estructura_tc: falta la tabla maestra CECO->concepto en SQL.")
+        """CECO -> conceptos de la ficha TC, derivado de las cargas TC que ya
+        existen en DATOS_ENTRADA para el departamento (las tres hojas que
+        procesa sp_ValorizarPlanilla_Total_2026). Puede incluir CECOs de otros
+        departamentos (docentes transversales).
+        TODO: reemplazar por una tabla maestra (p. ej. CECO_CONCEPTO_TC): al
+        guardar, la app solo inserta conceptos con horas > 0, así que un
+        concepto que nadie use en ninguna hoja TC desaparece de la estructura."""
+        return self._leer(
+            "SELECT DISTINCT LTRIM(RTRIM(de.CENTRO_COSTO)) AS CODIGO_CECO, "
+            "COALESCE(c.DESCRIPCION_CC, LTRIM(RTRIM(de.CENTRO_COSTO))) AS DESCRIPCION_CECO, "
+            "LTRIM(RTRIM(de.CONCEPTO)) AS CONCEPTO "
+            "FROM DATOS_ENTRADA de "
+            "LEFT JOIN CENTROS_COSTOS c ON c.CENTRO_COSTO = LTRIM(RTRIM(de.CENTRO_COSTO)) "
+            "WHERE de.ORIGEN = %s "
+            "AND de.HOJA_ORIGEN IN ('1. Plan TC-I', 'Plan TC-II', 'Plan TC Transversales') "
+            "AND NULLIF(LTRIM(RTRIM(de.CONCEPTO)), '') IS NOT NULL "
+            "AND LTRIM(RTRIM(de.CONCEPTO)) <> '0' "
+            "ORDER BY CODIGO_CECO, CONCEPTO", (origen,))
 
     def guardar(self, hoja: str, origen: str, filas: list[list], cols: list[str],
                 sps: list[tuple]) -> int:

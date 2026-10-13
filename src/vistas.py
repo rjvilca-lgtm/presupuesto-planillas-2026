@@ -272,7 +272,8 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
     docente se llenan al final mediante placeholders (st.empty), para
     reflejar lo recién tecleado en este mismo rerun."""
     dims = dims_fila(cfg)
-    desc_ceco = dict(zip(ccos["CODIGO_CECO"], ccos["DESCRIPCION_CECO"]))
+    desc_ceco = dict(zip(estructura["CODIGO_CECO"], estructura["DESCRIPCION_CECO"]))
+    desc_ceco.update(zip(ccos["CODIGO_CECO"], ccos["DESCRIPCION_CECO"]))
 
     estado_key = f"_ficha_{cfg['_hoja']}_{origen}"
     if estado_key not in st.session_state:

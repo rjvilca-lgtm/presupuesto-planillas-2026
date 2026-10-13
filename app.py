@@ -41,13 +41,7 @@ def main():
     if seleccion == "TC":
         st.caption(cfg_de(TC_HOJAS[0])["ayuda"])
         roster = repo.roster(origen)
-        try:
-            estructura = repo.estructura_tc(origen)
-        except NotImplementedError:
-            st.warning("El plan de trabajo TC aún no está disponible: falta en la "
-                       "base la tabla que define qué conceptos van en cada centro "
-                       "de costo. Elige otra planilla.", icon="🚧")
-            return
+        estructura = repo.estructura_tc(origen)
         pestañas = st.tabs(["I semestre (Ene-Jun)", "II semestre (Jul-Dic)"])
         for hoja, tab in zip(TC_HOJAS, pestañas):
             with tab:
@@ -82,7 +76,9 @@ def _renderizar_ficha_tc(repo, hoja, cfg, ccos, roster, estructura, tarifas, ori
     # guardado con confirmación (disparador en barra sticky; el resto del
     # flujo — validación, diálogo de confirmación — es idéntico al de la grilla)
     listo_key = f"_listo_{hoja}"
-    ccos_validos = set(ccos["CODIGO_CECO"])
+    # La estructura TC puede traer CECOs de otros departamentos (docentes
+    # transversales); son válidos porque vienen del catálogo, no del usuario.
+    ccos_validos = set(ccos["CODIGO_CECO"]) | set(estructura["CODIGO_CECO"])
     st.markdown('<div style="height:60px"></div>', unsafe_allow_html=True)
     with st.container(key=f"barra_guardar_{hoja}"):
         c_info, c_btn = st.columns([3, 1])
