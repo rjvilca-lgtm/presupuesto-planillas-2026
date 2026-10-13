@@ -209,8 +209,11 @@ class RepositorioSQL:
     def centros_costo(self, origen: str) -> pd.DataFrame:
         with self._conn() as conn:
             return pd.read_sql(
-                "SELECT CENTRO_COSTO AS CODIGO_CECO, DESCRIPCION_CC AS DESCRIPCION_CECO "
-                "FROM CENTROS_COSTOS WHERE DEPARTAMENTO = %s",
+                # CENTROS_COSTOS.DEPARTAMENTO guarda la descripción del
+                # departamento, no el código: se cruza vía Departamentos.
+                "SELECT c.CENTRO_COSTO AS CODIGO_CECO, c.DESCRIPCION_CC AS DESCRIPCION_CECO "
+                "FROM CENTROS_COSTOS c JOIN Departamentos d ON d.DESCRIPCION = c.DEPARTAMENTO "
+                "WHERE d.CODIGO = %s ORDER BY c.CENTRO_COSTO",
                 conn, params=[origen])
 
     def tarifas(self, hoja: str) -> dict:
