@@ -1,7 +1,7 @@
 """
 Capa de datos con dos implementaciones intercambiables.
 
-  RepositorioSQL   producción: Azure SQL vía pyodbc, con carga transaccional
+  RepositorioSQL   producción: Azure SQL vía python-tds, con carga transaccional
                    (DELETE + INSERT parametrizado + EXEC, todo o nada).
   RepositorioDemo  demostración: catálogos y padrón de ejemplo en memoria,
                    sin base de datos. Permite desplegar y mostrar la UX sin
@@ -203,26 +203,27 @@ class RepositorioSQL:
 
     def departamentos(self):
         with self._conn() as conn:
-            df = pd.read_sql("SELECT CODIGO, DESCRIPCION FROM direccion", conn)
+            df = pd.read_sql("SELECT CODIGO, DESCRIPCION FROM Departamentos", conn)
         return list(df.itertuples(index=False, name=None))
 
     def centros_costo(self, origen: str) -> pd.DataFrame:
         with self._conn() as conn:
             return pd.read_sql(
-                "SELECT CODIGO_CECO, DESCRIPCION_CECO FROM cc WHERE DEPARTAMENTO = %s",
+                "SELECT CENTRO_COSTO AS CODIGO_CECO, DESCRIPCION_CC AS DESCRIPCION_CECO "
+                "FROM CENTROS_COSTOS WHERE DEPARTAMENTO = %s",
                 conn, params=[origen])
 
     def tarifas(self, hoja: str) -> dict:
         with self._conn() as conn:
             df = pd.read_sql(
-                "SELECT TIPO, TARIFA FROM tarifas_2026 WHERE HOJA_ORIGEN = %s",
+                "SELECT TIPO, TARIFA FROM tarifas_2027 WHERE HOJA_ORIGEN = %s",
                 conn, params=[hoja])
         return dict(zip(df["TIPO"], df["TARIFA"]))
 
     def roster(self, origen: str) -> pd.DataFrame:
         with self._conn() as conn:
             return pd.read_sql(
-                "SELECT DNI, NOMBRE FROM padron_docentes WHERE DEPARTAMENTO = %s",
+                "SELECT DISTINCT DNI, NOMBRE FROM HORAS_DOCENTES WHERE DPTO = %s",
                 conn, params=[origen])
 
     def estructura_tc(self, origen: str) -> pd.DataFrame:

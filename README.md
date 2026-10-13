@@ -49,7 +49,7 @@ no escribe en ninguna base). Es el modo pensado para revisar la experiencia.
    completa la sección `[sql]`.
 3. `RepositorioSQL` usa `python-tds` (driver 100% Python, sin dependencias
    de sistema) — no requiere instalar ningún driver ODBC en la máquina/host.
-4. Los catálogos (`cc`, `direccion`, `tarifas_2026`, `padron_docentes`) deben
+4. Los catálogos (`Departamentos`, `CENTROS_COSTOS`, `tarifas_2027`, `HORAS_DOCENTES`) deben
    existir en SQL. Ajusta los nombres reales en `src/repositorio.py`.
 
 ## Desplegar en Streamlit Community Cloud
