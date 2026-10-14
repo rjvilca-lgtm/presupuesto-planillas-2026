@@ -71,20 +71,24 @@ def _renderizar_ficha_tc(repo, hoja, cfg, ccos, roster, estructura, tarifas, ori
     """Vista maestro-detalle de la ficha TC: resumen de docentes/horas arriba
     (lo pinta ficha_docente con un placeholder propio), y guardado con
     confirmación en una barra inferior sticky."""
+    # Resultado del último guardado (el diálogo se cierra con un rerun)
+    resultado = st.session_state.pop(f"_resultado_{hoja}", None)
+    if resultado:
+        ok, mensaje = resultado
+        (st.success if ok else st.error)(mensaje, icon="✅" if ok else "🛑")
+
     editado = ficha_docente(cfg, ccos, estructura, roster, origen)
 
-    # guardado con confirmación (disparador en barra sticky; el resto del
-    # flujo — validación, diálogo de confirmación — es idéntico al de la grilla)
-    listo_key = f"_listo_{hoja}"
     # La estructura TC puede traer CECOs de otros departamentos (docentes
     # transversales); son válidos porque vienen del catálogo, no del usuario.
     ccos_validos = set(ccos["CODIGO_CECO"]) | set(estructura["CODIGO_CECO"])
     st.markdown('<div style="height:60px"></div>', unsafe_allow_html=True)
     with st.container(key=f"barra_guardar_{hoja}"):
         c_info, c_btn = st.columns([3, 1])
+        con_horas = editado.loc[editado[cfg["mes_carga"]] > 0, "DNI"].nunique()
         c_info.markdown(
             f'<div class="bottom-info">{cfg["etiqueta"]} · '
-            f'{editado["DNI"].nunique()} docente(s)</div>',
+            f'{con_horas} de {editado["DNI"].nunique()} docente(s) con horas</div>',
             unsafe_allow_html=True)
         clic_guardar = c_btn.button("Guardar cambios", type="primary",
                                     width="stretch", key=f"btn_guardar_{hoja}")
@@ -94,24 +98,25 @@ def _renderizar_ficha_tc(repo, hoja, cfg, ccos, roster, estructura, tarifas, ori
             for e in errores:
                 st.error(e, icon="⚠️")
             return
-        st.session_state[listo_key] = True
+        # Diálogo emergente: la confirmación queda a la vista, no al final
+        # de la página detrás de la barra fija.
+        _dialogo_confirmar(repo, hoja, origen, editado)
 
-    if st.session_state.get(listo_key):
-        with st.container(border=True):
-            st.subheader("Confirmar carga")
-            st.write(f"Planilla **{cfg['etiqueta']}** · Departamento **{origen}**")
-            resumen_por_ceco(hoja, editado)
-            st.caption("Al confirmar se reemplaza la carga anterior de esta "
-                       "planilla para este departamento y se ejecuta la valorización.")
-            c1, c2 = st.columns(2)
-            if c1.button("Confirmar y valorizar", type="primary",
-                         width="stretch", key=f"btn_conf_{hoja}"):
-                guardar(repo, hoja, origen, editado)
-                st.session_state[listo_key] = False
-            if c2.button("Cancelar", width="stretch",
-                         key=f"btn_cancel_{hoja}"):
-                st.session_state[listo_key] = False
-                st.rerun()
+
+@st.dialog("Confirmar carga", width="large")
+def _dialogo_confirmar(repo, hoja, origen, editado):
+    cfg = cfg_de(hoja)
+    st.write(f"Planilla **{cfg['etiqueta']}** · Departamento **{origen}**")
+    resumen_por_ceco(hoja, editado)
+    st.caption("Al confirmar se reemplaza la carga anterior de esta "
+               "planilla para este departamento y se ejecuta la valorización.")
+    c1, c2 = st.columns(2)
+    if c1.button("Confirmar y valorizar", type="primary", width="stretch"):
+        with st.spinner("Guardando y valorizando…"):
+            st.session_state[f"_resultado_{hoja}"] = guardar(repo, hoja, origen, editado)
+        st.rerun()
+    if c2.button("Cancelar", width="stretch"):
+        st.rerun()
 
 
 def _renderizar_grilla(repo, hoja, cfg, ccos, roster, tarifas, origen):
@@ -148,7 +153,8 @@ def _renderizar_grilla(repo, hoja, cfg, ccos, roster, tarifas, origen):
             c1, c2 = st.columns(2)
             if c1.button("Confirmar y valorizar", type="primary",
                          width="stretch", key=f"btn_conf_{hoja}"):
-                guardar(repo, hoja, origen, editado)
+                ok, mensaje = guardar(repo, hoja, origen, editado)
+                (st.success if ok else st.error)(mensaje, icon="✅" if ok else "🛑")
                 st.session_state[listo_key] = False
             if c2.button("Cancelar", width="stretch",
                          key=f"btn_cancel_{hoja}"):
@@ -157,6 +163,8 @@ def _renderizar_grilla(repo, hoja, cfg, ccos, roster, tarifas, origen):
 
 
 def guardar(repo, hoja, origen, editado):
+    """Guarda y valoriza. Devuelve (ok, mensaje) para que quien llama decida
+    dónde mostrarlo (la ficha TC lo muestra después de cerrar el diálogo)."""
     cfg = cfg_de(hoja)
     filas, cols = preparar_filas(hoja, origen, editado, repo)
     try:
@@ -164,11 +172,10 @@ def guardar(repo, hoja, origen, editado):
             n = repo.guardar(hoja, origen, filas, cols, cfg["sps"])
         else:
             n = repo.guardar(hoja, origen, filas)
-        st.success(f"{n} registro(s) cargado(s) y valorizado(s) para "
-                   f"{cfg['etiqueta']} en {origen}.", icon="✅")
+        return True, (f"{n} registro(s) cargado(s) y valorizado(s) para "
+                      f"{cfg['etiqueta']} en {origen}.")
     except Exception as ex:
-        st.error(f"No se guardó nada; se revirtió la operación. Detalle: {ex}",
-                 icon="🛑")
+        return False, f"No se guardó nada; se revirtió la operación. Detalle: {ex}"
 
 
 def roster_vacio():

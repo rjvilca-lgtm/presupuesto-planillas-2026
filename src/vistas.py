@@ -23,6 +23,8 @@ from .validacion import formato_soles
 
 CSS = """
 <style>
+  /* menos espacio vacío arriba: la ficha TC entra mejor en pantallas de laptop */
+  .block-container, [data-testid="stMainBlockContainer"] { padding-top: 2.5rem; }
   .hero { padding: 1.1rem 1.3rem; border-left: 4px solid #B45309;
           background: #FFFFFF; border-radius: 6px; margin-bottom: .4rem; }
   .hero .monto { font-size: 2.6rem; font-weight: 700; color: #B45309;
@@ -44,14 +46,23 @@ CSS = """
   div[class*="st-key-people_card"] { border: 1px solid #E1E5EC; border-radius: 12px;
                                       padding: .3rem .6rem .6rem; }
   .people-header { font-size: .72rem; font-weight: 700; color: #17233B;
-                   letter-spacing: .3px; padding: .5rem .2rem .4rem; }
+                   letter-spacing: .3px; padding: .5rem .2rem .2rem;
+                   display: flex; justify-content: space-between; }
+  .people-header .pendientes { color: #B45309; font-weight: 600; }
 
-  div[class*="st-key-docitem_"] { margin: 0; border-bottom: 1px solid #F0F2F6; }
+  div[class*="st-key-docitem_"] { margin: 0; }
   div[class*="st-key-docitem_"] button { justify-content: flex-start !important;
                                           text-align: left !important;
-                                          font-weight: 400; border-radius: 8px; }
+                                          font-weight: 400; border-radius: 8px;
+                                          padding: .35rem .6rem; min-height: 0;
+                                          line-height: 1.25; }
+  div[class*="st-key-docitem_"] button > div,
+  div[class*="st-key-docitem_"] button p { justify-content: flex-start !important;
+                                            text-align: left !important;
+                                            width: 100%; font-size: .82rem; }
   div[class*="st-key-docitem_"] button[kind="secondary"] {
       background: transparent; border-color: transparent; }
+  div[class*="st-key-docitem_"] button[kind="secondary"]:hover { background: #F7F8FA; }
   div[class*="st-key-docitem_"] button[kind="primary"] {
       background: #F1F5FC; color: #315B9D; border-color: #F1F5FC;
       border-left: 3px solid #315B9D; }
@@ -69,15 +80,22 @@ CSS = """
   .detail-head .total .numero { font-size: 1.2rem; font-weight: 700; color: #17233B; }
   .detail-head .total .etiqueta { font-size: .62rem; color: #7A8496; letter-spacing: .2px; }
 
-  div[class*="st-key-ceco_"] { padding: 0; margin-bottom: .8rem; }
-  .ceco-card-header { font-size: .68rem; font-weight: 800; letter-spacing: .3px;
-                      text-transform: uppercase; color: #B35B18; margin-bottom: .3rem; }
+  div[class*="st-key-ceco_"] { padding: .7rem 1rem .4rem; margin-bottom: .2rem; }
+  .ceco-card-header { display: flex; justify-content: space-between; align-items: baseline;
+                      gap: 1rem; border-bottom: 1px solid #F0F2F6; padding-bottom: .4rem; }
+  .ceco-card-header .titulo { font-size: .74rem; font-weight: 800; letter-spacing: .3px;
+                              text-transform: uppercase; color: #B35B18; }
   .ceco-card-header .codigo-ceco { color: #9BA3B1; font-weight: 500;
                                    text-transform: none; margin-left: .35rem; }
+  .ceco-card-header .subtotal { font-size: .78rem; color: #667085; white-space: nowrap; }
+  .ceco-card-header .subtotal b { color: #17233B; }
 
-  .actividad-label { font-size: .82rem; color: #344054; padding-top: .5rem; }
-
-  div[data-testid="stNumberInput"] { max-width: 150px; }
+  div[class*="st-key-ceco_"] div[data-testid="stNumberInput"] label p {
+      font-size: .8rem; color: #344054; }
+  div[class*="st-key-ceco_"] div[data-testid="stNumberInput"] { max-width: 230px; }
+  /* sin botones +/-: las horas se teclean, y así el campo ocupa menos */
+  div[class*="st-key-ceco_"] button[data-testid="stNumberInputStepUp"],
+  div[class*="st-key-ceco_"] button[data-testid="stNumberInputStepDown"] { display: none; }
   div[data-testid="stNumberInputContainer"] { background: #F3F5F8 !important;
                                               border-radius: 8px; border: none !important; }
   div[data-testid="stNumberInputField"] { background: transparent !important;
@@ -104,6 +122,10 @@ def inyectar_estilos():
 _DOC_IDENTIDAD = re.compile(r"\d{8}|[0-9A-Za-z]{9,12}")
 
 TC_HOJAS = ["1. Plan TC-I", "Plan TC-II"]
+
+# Ficha TC: alto (px) de los paneles con scroll propio y campos por fila
+ALTO_PANEL = 470
+CAMPOS_POR_FILA = 3
 
 
 def selector_contexto(repo):
@@ -265,8 +287,9 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
     que preparar_filas() no cambie: el valor va solo en cfg["mes_carga"]
     (MARZO / AGOSTO) y el sp de valorización lo replica al resto del semestre.
 
-    Layout maestro-detalle: lista de docentes a la izquierda, ficha del
-    docente activo (centros de costo en grilla de 2 columnas) a la derecha.
+    Layout maestro-detalle: lista de docentes (con buscador) a la izquierda,
+    ficha del docente activo a la derecha (un CECO por tarjeta). Ambos
+    paneles tienen alto fijo y scroll propio.
     El docente activo se guarda en session_state para sobrevivir el rerun
     que dispara cada clic de la lista. El resumen superior y el total por
     docente se llenan al final mediante placeholders (st.empty), para
@@ -297,12 +320,17 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
 
     with col_lista:
         with st.container(key=f"people_card_{estado_key}"):
-            st.markdown('<div class="people-header">DOCENTES</div>',
-                       unsafe_allow_html=True)
-            # Placeholder: las horas por docente de esta lista solo reflejan lo
-            # recién tecleado si se llenan después de recorrer los number_input
-            # del docente activo más abajo (mismo motivo que resumen_slot).
-            lista_slot = st.empty()
+            # Placeholders: el encabezado (pendientes) y las horas por docente
+            # solo reflejan lo recién tecleado si se llenan después de recorrer
+            # los number_input del docente activo (mismo motivo que resumen_slot).
+            cabecera_slot = st.empty()
+            filtro = st.text_input(
+                "Buscar docente", key=f"buscar_{estado_key}",
+                placeholder="Buscar por nombre o DNI", label_visibility="collapsed")
+            # Alto fijo con scroll propio: la lista no empuja la ficha hacia
+            # abajo aunque el departamento tenga muchos docentes.
+            with st.container(height=ALTO_PANEL - 90, border=False):
+                lista_slot = st.empty()
 
             with st.expander("➕ Agregar docente fuera del padrón"):
                 st.caption("Usa esto solo si el docente no aparece en el padrón "
@@ -333,18 +361,28 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                             [ledger, nuevo], ignore_index=True)
                         st.rerun()
 
+    def _elegir(dni_d):
+        st.session_state[activo_key] = dni_d
+
     def _pintar_lista(horas_por_docente):
-        for _, fila_doc in docentes.iterrows():
+        texto = (filtro or "").strip().lower()
+        visibles = docentes
+        if texto:
+            visibles = docentes[docentes["NOMBRE"].str.lower().str.contains(texto, regex=False)
+                                | docentes["DNI"].astype(str).str.contains(texto, regex=False)]
+        if visibles.empty:
+            st.caption("Ningún docente coincide con la búsqueda.")
+        for _, fila_doc in visibles.iterrows():
             dni_d, nombre_d = fila_doc["DNI"], fila_doc["NOMBRE"]
             h = horas_por_docente.get(dni_d, 0.0)
             activo = dni_d == st.session_state[activo_key]
             with st.container(key=f"docitem_{estado_key}_{dni_d}"):
-                if st.button(f"{nombre_d}  \nDNI {dni_d} · {h:,.1f} h/mes",
-                            key=f"docsel_{estado_key}_{dni_d}",
-                            width="stretch",
-                            type="primary" if activo else "secondary"):
-                    st.session_state[activo_key] = dni_d
-                    st.rerun()
+                st.button(f"**{nombre_d}**  \nDNI {dni_d} · {h:,.1f} h/mes",
+                          key=f"docsel_{estado_key}_{dni_d}", width="stretch",
+                          icon=":material/check_circle:" if h > 0
+                          else ":material/radio_button_unchecked:",
+                          type="primary" if activo else "secondary",
+                          on_click=_elegir, args=(dni_d,))
 
     with col_detalle:
         # Placeholder: nombre + total de horas se pintan juntos al final,
@@ -353,38 +391,50 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
 
         sub = ledger[ledger["DNI"] == dni_sel]
         total_docente = 0.0
-        cecos_docente = list(sub.groupby("CENTRO_COSTO", sort=False))
 
         def _tarjeta_ceco(ceco, grupo):
+            """Un CECO a todo el ancho, con sus conceptos en filas de
+            CAMPOS_POR_FILA campos: las tarjetas se alinean sin huecos."""
             nonlocal total_docente
             with st.container(border=True, key=f"ceco_{estado_key}_{dni_sel}_{ceco}"):
-                st.markdown(
-                    f'<div class="ceco-card-header">{escape(str(desc_ceco.get(ceco, ceco)))}'
-                    f'<span class="codigo-ceco">{escape(str(ceco))}</span></div>',
-                    unsafe_allow_html=True,
-                )
-                for idx, fila in grupo.iterrows():
-                    c_label, c_input = st.columns([3, 2])
-                    c_label.markdown(
-                        f'<div class="actividad-label">{escape(str(fila["CONCEPTO"]))}</div>',
-                        unsafe_allow_html=True)
-                    key = f"h_{estado_key}_{dni_sel}_{ceco}_{fila['CONCEPTO']}"
-                    valor = c_input.number_input(
-                        fila["CONCEPTO"], min_value=0.0, value=float(fila["HORAS"]),
-                        step=0.5, format="%.1f", key=key, label_visibility="collapsed")
-                    ledger.loc[idx, "HORAS"] = valor
-                    total_docente += valor
+                cabecera = st.empty()
+                subtotal = 0.0
+                filas = list(grupo.iterrows())
+                for i in range(0, len(filas), CAMPOS_POR_FILA):
+                    cols = st.columns(CAMPOS_POR_FILA, gap="medium")
+                    for col, (idx, fila) in zip(cols, filas[i:i + CAMPOS_POR_FILA]):
+                        key = f"h_{estado_key}_{dni_sel}_{ceco}_{fila['CONCEPTO']}"
+                        valor = col.number_input(
+                            str(fila["CONCEPTO"]), min_value=0.0,
+                            value=float(fila["HORAS"]), step=0.5, format="%.1f", key=key)
+                        ledger.loc[idx, "HORAS"] = valor
+                        subtotal += valor
+                total_docente += subtotal
+                cabecera.markdown(
+                    f'<div class="ceco-card-header"><div class="titulo">'
+                    f'{escape(str(desc_ceco.get(ceco, ceco)))}'
+                    f'<span class="codigo-ceco">{escape(str(ceco))}</span></div>'
+                    f'<div class="subtotal"><b>{subtotal:,.1f}</b> h/mes</div></div>',
+                    unsafe_allow_html=True)
 
-        for i in range(0, len(cecos_docente), 2):
-            par = cecos_docente[i:i + 2]
-            if len(par) == 2:
-                cols = st.columns(2, gap="small")
-                for col, (ceco, grupo) in zip(cols, par):
-                    with col:
-                        _tarjeta_ceco(ceco, grupo)
-            else:
-                ceco, grupo = par[0]
+        # Clave por docente: al cambiar de docente el panel vuelve arriba
+        with st.container(height=ALTO_PANEL, border=False,
+                          key=f"detalle_{estado_key}_{dni_sel}"):
+            for ceco, grupo in sub.groupby("CENTRO_COSTO", sort=False):
                 _tarjeta_ceco(ceco, grupo)
+
+        # Pasar al docente vecino sin volver a buscarlo en la lista
+        pos = int(docentes.index[docentes["DNI"] == dni_sel][0])
+        c_ant, c_pos, c_sig = st.columns([1, 2, 1], vertical_alignment="center")
+        c_ant.button("← Anterior", key=f"ant_{estado_key}", width="stretch",
+                     disabled=pos == 0, on_click=_elegir,
+                     args=(docentes["DNI"].iloc[max(pos - 1, 0)],))
+        c_pos.markdown(f'<div style="text-align:center;color:#667085;font-size:.8rem">'
+                       f'Docente {pos + 1} de {len(docentes)}</div>',
+                       unsafe_allow_html=True)
+        c_sig.button("Siguiente →", key=f"sig_{estado_key}", width="stretch",
+                     disabled=pos == len(docentes) - 1, on_click=_elegir,
+                     args=(docentes["DNI"].iloc[min(pos + 1, len(docentes) - 1)],))
 
         nombre_sel = docentes.loc[docentes["DNI"] == dni_sel, "NOMBRE"].iloc[0]
         with detalle_head_slot.container():
@@ -402,8 +452,14 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                 unsafe_allow_html=True,
             )
 
+    horas_lista = ledger.groupby("DNI")["HORAS"].sum()
+    pendientes = int((horas_lista.reindex(docentes["DNI"]).fillna(0) <= 0).sum())
+    extra = f'<span class="pendientes">{pendientes} sin horas</span>' if pendientes else ""
+    cabecera_slot.markdown(
+        f'<div class="people-header"><span>DOCENTES ({len(docentes)})</span>{extra}</div>',
+        unsafe_allow_html=True)
     with lista_slot.container():
-        _pintar_lista(ledger.groupby("DNI")["HORAS"].sum())
+        _pintar_lista(horas_lista)
 
     st.session_state[estado_key] = ledger
 
