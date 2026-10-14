@@ -255,20 +255,24 @@ class RepositorioSQL:
         existe = self._leer("SELECT OBJECT_ID('dbo.CECO_CONCEPTO_TC', 'U') AS ID")
         if existe["ID"].iloc[0] is not None:
             return self._leer(
-                # JOIN (no LEFT): un CECO que no existe en CENTROS_COSTOS
-                # (p. ej. '0', heredado del Excel) no se ofrece en la ficha.
-                "SELECT t.CENTRO_COSTO AS CODIGO_CECO, c.DESCRIPCION_CC AS DESCRIPCION_CECO, "
+                # CENTRO_COSTO '0' es intencional: horas de Gestión de Dirección
+                # que valoriza Desarrollo Humano y se excluyen del reporte. Cuentan
+                # en el total de horas del docente (reparto del sueldo en el sp).
+                "SELECT t.CENTRO_COSTO AS CODIGO_CECO, "
+                "CASE WHEN t.CENTRO_COSTO = '0' THEN N'Gestión de Dirección (sin centro de costo; la valoriza Desarrollo Humano)' "
+                "ELSE COALESCE(c.DESCRIPCION_CC, t.CENTRO_COSTO) END AS DESCRIPCION_CECO, "
                 "t.CONCEPTO "
                 "FROM CECO_CONCEPTO_TC t "
-                "JOIN CENTROS_COSTOS c ON c.CENTRO_COSTO = t.CENTRO_COSTO "
+                "LEFT JOIN CENTROS_COSTOS c ON c.CENTRO_COSTO = t.CENTRO_COSTO "
                 "WHERE t.DEPARTAMENTO = %s AND t.ACTIVO = 1 "
                 "ORDER BY t.CENTRO_COSTO, t.CONCEPTO", (origen,))
         return self._leer(
             "SELECT DISTINCT LTRIM(RTRIM(de.CENTRO_COSTO)) AS CODIGO_CECO, "
-            "c.DESCRIPCION_CC AS DESCRIPCION_CECO, "
+            "CASE WHEN LTRIM(RTRIM(de.CENTRO_COSTO)) = '0' THEN N'Gestión de Dirección (sin centro de costo; la valoriza Desarrollo Humano)' "
+            "ELSE COALESCE(c.DESCRIPCION_CC, LTRIM(RTRIM(de.CENTRO_COSTO))) END AS DESCRIPCION_CECO, "
             "LTRIM(RTRIM(de.CONCEPTO)) AS CONCEPTO "
             "FROM DATOS_ENTRADA de "
-            "JOIN CENTROS_COSTOS c ON c.CENTRO_COSTO = LTRIM(RTRIM(de.CENTRO_COSTO)) "
+            "LEFT JOIN CENTROS_COSTOS c ON c.CENTRO_COSTO = LTRIM(RTRIM(de.CENTRO_COSTO)) "
             "WHERE de.ORIGEN = %s "
             "AND de.HOJA_ORIGEN IN ('1. Plan TC-I', 'Plan TC-II', 'Plan TC Transversales') "
             "AND NULLIF(LTRIM(RTRIM(de.CONCEPTO)), '') IS NOT NULL "
