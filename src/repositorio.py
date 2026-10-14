@@ -283,20 +283,26 @@ class RepositorioSQL:
         sql_insert = f"INSERT INTO DATOS_ENTRADA ({', '.join(cols)}) VALUES ({placeholders})"
         sql_delete = ("DELETE FROM DATOS_ENTRADA "
                       "WHERE HOJA_ORIGEN = %s AND ORIGEN = %s AND PRESUPUESTO = %s")
+        print(f"[guardar] {PRESUPUESTO} · {hoja} · {origen}: {len(filas)} fila(s)", flush=True)
         with self._conn() as conn:
             cur = conn.cursor()
             try:
                 cur.execute(sql_delete, [hoja, origen, PRESUPUESTO])
+                print(f"[guardar] DELETE previo: {cur.rowcount} fila(s)", flush=True)
                 cur.executemany(sql_insert, filas)
+                print("[guardar] INSERT ok", flush=True)
                 for sp, lleva_origen in sps:
                     if lleva_origen:
                         cur.execute(f"EXEC {sp} @OrigenEntrada = %s", [origen])
                     else:
                         cur.execute(f"EXEC {sp}")
+                    print(f"[guardar] EXEC {sp} ok", flush=True)
                 conn.commit()
+                print("[guardar] COMMIT", flush=True)
                 return len(filas)
-            except Exception:
+            except Exception as e:
                 conn.rollback()
+                print(f"[guardar] ROLLBACK por error: {e!r}", flush=True)
                 raise
 
 
