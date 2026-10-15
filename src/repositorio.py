@@ -176,6 +176,10 @@ class RepositorioDemo:
 
     _usuarios: list = []
 
+    def valorizacion(self, anio: int, origenes: list[str]) -> pd.DataFrame:
+        return pd.DataFrame(columns=["DEPTO", "ORIGEN", "PARTIDA", "DESCRIPCION",
+                                     "CENTRO_COSTO", "MES", "IMPORTE"])
+
     def permisos_usuario(self, email: str) -> pd.DataFrame:
         filas = [u for u in self._usuarios if u["EMAIL"] == email and u.get("ACTIVO", True)]
         return pd.DataFrame(filas, columns=["ROL", "DEPARTAMENTO"])
@@ -508,6 +512,22 @@ class RepositorioSQL:
             f"WHEN NOT MATCHED THEN INSERT (PRESUPUESTO, DEPARTAMENTO, {', '.join(cols)}) "
             f"VALUES (s.PRESUPUESTO, s.DEPARTAMENTO, {', '.join(['%s'] * len(cols))});",
             [PRESUPUESTO, depto] + valores + valores)
+
+    def valorizacion(self, anio: int, origenes: list[str]) -> pd.DataFrame:
+        """Montos de PLANILLA por departamento (ORIGEN_2), planilla, partida,
+        centro de costo y mes. 2026 casi no cambia (caché de 10 min); 2027
+        cambia con cada valorización (caché corta)."""
+        if not origenes:
+            return pd.DataFrame(columns=["DEPTO", "ORIGEN", "PARTIDA", "DESCRIPCION",
+                                         "CENTRO_COSTO", "MES", "IMPORTE"])
+        marcas = ", ".join(["%s"] * len(origenes))
+        sql = ("SELECT p.ORIGEN_2 AS DEPTO, p.ORIGEN, p.PARTIDA, pp.Descripcion AS DESCRIPCION, "
+               "p.CENTRO_COSTO, p.MES, CAST(SUM(p.IMPORTE) AS float) AS IMPORTE "
+               "FROM PLANILLA p LEFT JOIN PartidaPresupuestal pp ON pp.Codigo = p.PARTIDA "
+               f"WHERE p.AÑO = %s AND p.ORIGEN_2 IN ({marcas}) "
+               "GROUP BY p.ORIGEN_2, p.ORIGEN, p.PARTIDA, pp.Descripcion, p.CENTRO_COSTO, p.MES")
+        leer = self._leer if anio < 2027 else self._leer_vivo
+        return leer(sql, (anio, *origenes))
 
     def permisos_usuario(self, email: str) -> pd.DataFrame:
         """Roles activos del correo (ver sql/crear_usuarios_planillas.sql)."""
