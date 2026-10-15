@@ -203,6 +203,8 @@ def guardar(repo, hoja, origen, editado):
             n = repo.guardar(hoja, origen, filas, cols, cfg["sps"])
         else:
             n = repo.guardar(hoja, origen, filas)
+        # La consulta de carga académica muestra las horas TC recién guardadas
+        repo.limpiar_cache()
         return True, (f"{n} registro(s) cargado(s) y valorizado(s) para "
                       f"{cfg['etiqueta']} en {origen}.")
     except Exception as ex:

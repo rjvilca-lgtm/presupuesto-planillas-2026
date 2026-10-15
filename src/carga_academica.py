@@ -18,6 +18,7 @@ from .config import CARGA_ACADEMICA, PRESUPUESTO
 
 CA = CARGA_ACADEMICA
 CONCEPTOS = list(CA["conceptos"])
+TITULARES = "# HORAS TITULARES"
 COLS_GRILLA = ["MES", "CENTRO_COSTO"] + CONCEPTOS
 COLS_DESTINO = ["PRESUPUESTO", "HOJA_ORIGEN", "ORIGEN", "CENTRO_COSTO", "CONCEPTO",
                 "MES", "IMPORTE"]
@@ -192,10 +193,64 @@ def consulta_carga_academica(repo):
                     .T.values))
     datos.insert(2, "DESCRIPCION_CECO", datos["CENTRO_COSTO"].map(desc))
 
+    # Horas de los docentes a tiempo completo (DTC) que el sp resta de las de
+    # titulares: horas académicas de dictado de los planes TC, por CECO y semestre
+    dtc = repo.horas_dtc()
+    por_ceco = dtc.groupby(["MES", "CENTRO_COSTO"])["HORAS"].sum()
+    titulares = pd.to_numeric(datos[TITULARES], errors="coerce").fillna(0.0)
+    descuento = pd.Series([por_ceco.get((m, c), 0.0)
+                           for m, c in zip(datos["MES"], datos["CENTRO_COSTO"])],
+                          index=datos.index)
+    datos.insert(datos.columns.get_loc(TITULARES) + 1, "HORAS_DTC", descuento)
+    datos.insert(datos.columns.get_loc("HORAS_DTC") + 1, "TITULARES_NETAS",
+                 (titulares - descuento).clip(lower=0))
+
     semestre = st.segmented_control("Semestre", ["Todos"] + CA["semestres"],
                                     default="Todos", key="semestre_consulta_ca") or "Todos"
     if semestre != "Todos":
         datos = datos[datos["MES"] == semestre]
-    st.dataframe(datos, hide_index=True, width="stretch",
-                 column_config=_colcfg(repo.todos_centros_costo(), False))
-    st.dataframe(_totales(datos), hide_index=True, width="stretch")
+        dtc = dtc[dtc["MES"] == semestre]
+
+    colcfg = _colcfg(repo.todos_centros_costo(), False)
+    colcfg["HORAS_DTC"] = st.column_config.NumberColumn(
+        "− Horas DTC", format="%.2f",
+        help="Horas académicas de dictado que los departamentos registraron en "
+             "los planes TC 2027 para este centro de costo y semestre. Se restan "
+             "de las horas de titulares al valorizar.")
+    colcfg["TITULARES_NETAS"] = st.column_config.NumberColumn(
+        "= Titulares a valorizar", format="%.2f",
+        help="Horas de titulares menos horas DTC (nunca menor que 0). Es lo que "
+             "se valoriza con la tarifa de titular.")
+    st.dataframe(datos, hide_index=True, width="stretch", column_config=colcfg)
+
+    resumen = datos.groupby("MES")[[TITULARES, "HORAS_DTC", "TITULARES_NETAS"]
+                                   + CONCEPTOS[1:]].sum(numeric_only=True).reset_index()
+    st.dataframe(resumen, hide_index=True, width="stretch", column_config={
+        "MES": st.column_config.TextColumn("Semestre"),
+        **{k: v for k, v in colcfg.items() if k in resumen.columns}})
+
+    with st.expander("Detalle de horas DTC por docente"):
+        if dtc.empty:
+            st.caption("Aún no hay planes TC 2027 guardados con horas académicas de "
+                       "dictado.")
+        else:
+            st.caption("Horas académicas de dictado de cada docente TC, tal como las "
+                       "registró su departamento. Sirve para revisar de dónde sale "
+                       "el descuento de cada centro de costo.")
+            # Horas DTC en centros de costo que la DGA no registró: no descuentan nada
+            sin_carga = set(zip(dtc["MES"], dtc["CENTRO_COSTO"])) - set(
+                zip(datos["MES"], datos["CENTRO_COSTO"]))
+            if sin_carga:
+                st.warning("Hay horas DTC en centros de costo sin carga académica "
+                           "registrada (no se descuentan de nada): "
+                           + ", ".join(f"{m} · {c}" for m, c in sorted(sin_carga)),
+                           icon="⚠️")
+            st.dataframe(
+                dtc.sort_values(["MES", "CENTRO_COSTO", "NOMBRE"]),
+                hide_index=True, width="stretch", column_config={
+                    "MES": st.column_config.TextColumn("Semestre"),
+                    "CENTRO_COSTO": st.column_config.TextColumn("Centro de costo"),
+                    "ORIGEN": st.column_config.TextColumn("Departamento"),
+                    "NOMBRE": st.column_config.TextColumn("Docente"),
+                    "HORAS": st.column_config.NumberColumn("Horas académicas",
+                                                           format="%.2f")})

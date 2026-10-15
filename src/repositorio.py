@@ -20,7 +20,7 @@ from contextlib import contextmanager
 import pandas as pd
 import streamlit as st
 
-from .config import CARGA_ACADEMICA, PRESUPUESTO, cfg_de
+from .config import CARGA_ACADEMICA, CONCEPTO_ACADEMICAS, PRESUPUESTO, cfg_de
 
 
 # ---------------------------------------------------------------------
@@ -131,6 +131,9 @@ class RepositorioDemo:
 
     def carga_academica(self, actual: bool = True) -> pd.DataFrame:
         return pd.DataFrame(columns=["MES", "CENTRO_COSTO", "CONCEPTO", "IMPORTE"])
+
+    def horas_dtc(self) -> pd.DataFrame:
+        return pd.DataFrame(columns=["MES", "CENTRO_COSTO", "ORIGEN", "DNI", "NOMBRE", "HORAS"])
 
     def limpiar_cache(self):
         pass
@@ -310,6 +313,25 @@ class RepositorioSQL:
             "LTRIM(RTRIM(CONCEPTO)) AS CONCEPTO, CAST(IMPORTE AS float) AS IMPORTE "
             "FROM DATOS_ENTRADA WHERE HOJA_ORIGEN = %s AND ORIGEN = %s AND " + filtro,
             params)
+
+    def horas_dtc(self) -> pd.DataFrame:
+        """Horas académicas de dictado de los planes TC 2027 por docente, centro
+        de costo y semestre: las que sp_Valorizar_CargaAcademica_2027 resta de
+        las horas de titulares (mismo filtro y misma regla de semestre: MES
+        1-7 -> 2027-1, 8-12 -> 2027-2)."""
+        sem1, sem2 = CARGA_ACADEMICA["semestres"]
+        return self._leer(
+            "SELECT MES, CENTRO_COSTO, ORIGEN, DNI, NOMBRE, "
+            "CAST(SUM(HORAS) AS float) AS HORAS FROM ("
+            "  SELECT CASE WHEN TRY_CAST(MES AS INT) BETWEEN 1 AND 7 THEN %s "
+            "              WHEN TRY_CAST(MES AS INT) BETWEEN 8 AND 12 THEN %s END AS MES, "
+            "  LTRIM(RTRIM(CENTRO_COSTO)) AS CENTRO_COSTO, ORIGEN, DNI, NOMBRE, "
+            "  ISNULL(HORAS, 0) AS HORAS "
+            "  FROM DATOS_ENTRADA "
+            "  WHERE LTRIM(RTRIM(HOJA_ORIGEN)) IN ('Plan TC Transversales', '1. Plan TC-I', 'Plan TC-II') "
+            "  AND LTRIM(RTRIM(CONCEPTO)) = %s AND PRESUPUESTO = %s"
+            ") t GROUP BY MES, CENTRO_COSTO, ORIGEN, DNI, NOMBRE",
+            (sem1, sem2, CONCEPTO_ACADEMICAS, PRESUPUESTO))
 
     def limpiar_cache(self):
         """Tras guardar: la consulta debe ver lo recién cargado, no la copia
