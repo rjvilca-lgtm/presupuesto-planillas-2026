@@ -14,6 +14,7 @@ La interfaz es idéntica, así que la interfaz de usuario no distingue el modo.
 from __future__ import annotations
 
 import concurrent.futures
+import threading
 import time
 from contextlib import contextmanager
 
@@ -220,23 +221,53 @@ def _conectar_con_timeout(server, port, database, user, password):
 # Los catálogos casi no cambian durante una sesión y Streamlit re-ejecuta el
 # script en cada interacción: sin caché, cada tecla abriría varias conexiones
 # TLS nuevas a Azure. Se cachean por 10 minutos (por consulta + parámetros).
+@st.cache_resource(show_spinner=False)
+def _conexion_lectura(server, port, database, user):
+    """Una conexión de lectura compartida por todas las sesiones. Abrir una
+    conexión TLS a Azure cuesta ~0.7 s (más desde Streamlit Cloud): con una
+    por consulta, la primera carga de la página tardaba 15-20 s. El lock
+    serializa las lecturas (pytds no admite uso concurrente de una conexión)."""
+    return {"conn": None, "lock": threading.Lock()}
+
+
+def _consultar(server, port, database, user, password,
+               sql: str, params: tuple) -> pd.DataFrame:
+    compartida = _conexion_lectura(server, port, database, user)
+    with compartida["lock"]:
+        for intento in (1, 2):
+            if compartida["conn"] is None:
+                compartida["conn"] = _conectar_con_timeout(server, port, database,
+                                                           user, password)
+            conn = compartida["conn"]
+            try:
+                cur = conn.cursor()
+                cur.execute(sql, list(params))
+                columnas = [d[0] for d in cur.description]
+                filas = cur.fetchall()
+                conn.rollback()   # cierra la transacción implícita de la lectura
+                return pd.DataFrame(filas, columns=columnas)
+            except Exception as e:
+                # Conexión caída (Azure cierra las inactivas): se reabre una vez
+                print(f"[sql] lectura falló ({e!r}); reconectando", flush=True)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                compartida["conn"] = None
+                if intento == 2:
+                    raise
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def _leer_cacheado(server, port, database, user, password,
                    sql: str, params: tuple) -> pd.DataFrame:
-    conn = _conectar_con_timeout(server, port, database, user, password)
-    try:
-        cur = conn.cursor()
-        cur.execute(sql, list(params))
-        columnas = [d[0] for d in cur.description]
-        return pd.DataFrame(cur.fetchall(), columns=columnas)
-    finally:
-        conn.close()
+    return _consultar(server, port, database, user, password, sql, params)
 
 
 @st.cache_data(ttl=20, show_spinner=False)
 def _leer_corto(server, port, database, user, password,
                 sql: str, params: tuple) -> pd.DataFrame:
-    return _leer_cacheado.__wrapped__(server, port, database, user, password, sql, params)
+    return _consultar(server, port, database, user, password, sql, params)
 
 
 class RepositorioSQL:
