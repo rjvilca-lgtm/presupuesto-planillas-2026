@@ -13,6 +13,7 @@ Foco de experiencia:
 
 import re
 from html import escape
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -184,18 +185,38 @@ def hero(hoja: str, total_soles: float, horas: float, lineas: int, registros: in
     )
 
 
+@st.cache_data
+def _leer_precarga(ruta: str) -> pd.DataFrame:
+    return pd.read_csv(Path(__file__).resolve().parent.parent / ruta,
+                       dtype=str, encoding="utf-8").fillna("")
+
+
+def _columnas_fila(cfg: dict) -> list[str]:
+    """Columnas de la grilla a la izquierda de los meses: info + dimensiones
+    (+ TARIFA si es editable, justo después del TIPO)."""
+    cols = list(cfg.get("columnas_info", [])) + dims_fila(cfg)
+    if cfg.get("tarifa_editable"):
+        cols.insert(cols.index(cfg["catalogo_key"]) + 1, "TARIFA")
+    return cols
+
+
 def _semilla(cfg: dict, roster: pd.DataFrame) -> pd.DataFrame:
     """Grilla inicial: dimensiones de fila + una columna por mes.
-    Con padrón, una fila por docente ya identificada."""
-    dims = dims_fila(cfg)
+    Con padrón, una fila por docente ya identificada; con precarga, las
+    filas del CSV (p. ej. los conceptos de horas adicionales)."""
+    cols = _columnas_fila(cfg)
     if cfg["usa_roster"] and not roster.empty:
         base = roster.copy()
-        for d in dims:
-            if d not in base.columns:
-                base[d] = None
-        base = base[dims]
+    elif cfg.get("precarga"):
+        base = _leer_precarga(cfg["precarga"]).copy()
     else:
-        base = pd.DataFrame(columns=dims)
+        base = pd.DataFrame(columns=cols)
+    for d in cols:
+        if d not in base.columns:
+            base[d] = None
+    base = base[cols]
+    if "TARIFA" in cols:
+        base["TARIFA"] = pd.to_numeric(base["TARIFA"], errors="coerce")
     for m in MESES:
         base[m] = pd.Series(dtype="float64")
     return base
@@ -241,10 +262,23 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
         "CONCEPTO": st.column_config.TextColumn("Concepto"),
         "CONCEPTO_2": st.column_config.TextColumn("Detalle"),
     }
+    if cfg.get("precarga"):
+        precarga = _leer_precarga(cfg["precarga"])
+        # Las filas nuevas eligen de la misma lista que viene precargada
+        for col, titulo in (("FOCO", "Foco"), ("CONCEPTO", "Concepto")):
+            if col in precarga:
+                colcfg[col] = st.column_config.SelectboxColumn(
+                    titulo, options=sorted(precarga[col].unique()), width="medium")
     if cfg["tarifa"] == "catalogo":
         colcfg[cfg["catalogo_key"]] = st.column_config.SelectboxColumn(
             "Tipo", options=list(tarifas), required=True,
-            help="La tarifa se aplica sola según el tipo. No se teclea el precio.")
+            help="La tarifa se aplica sola según el tipo. No se teclea el precio."
+            if not cfg.get("tarifa_editable") else
+            "Al elegir el tipo se llena la tarifa 2027; puedes cambiarla.")
+    if cfg.get("tarifa_editable"):
+        colcfg["TARIFA"] = st.column_config.NumberColumn(
+            "Tarifa (S/ por hora)", min_value=0.0, format="%.2f", width="small",
+            help="Se llena con la tarifa 2027 del tipo elegido. Puedes cambiarla.")
 
     # columnas de mes (encabezado corto para ver más meses a la vez)
     fmt = "%.1f" if metrica == "HORAS" else "%.2f"
@@ -256,9 +290,11 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
                "Puedes pegar un bloque de celdas copiado desde Excel. "
                "Los datos del otro semestre no se pierden al cambiar de vista.")
 
+    cols_fila = _columnas_fila(cfg)
     base_key = f"_base_{hoja}_{origen}"
     ultimo_key = f"_ultimo_{hoja}_{origen}"
     sem_key = f"_sem_base_{hoja}_{origen}"
+    ver_key = f"_ver_{hoja}_{origen}"
     if base_key not in st.session_state:
         st.session_state[base_key] = _semilla(cfg, roster)
         st.session_state[ultimo_key] = st.session_state[base_key]
@@ -269,10 +305,13 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
 
     editado = st.data_editor(
         st.session_state[base_key], num_rows="dynamic", width="stretch",
-        hide_index=True, column_order=dims + meses_visibles,
-        column_config={k: v for k, v in colcfg.items() if k in dims + MESES},
-        key=f"grilla_{hoja}_{origen}_{semestre}",
+        hide_index=True, column_order=cols_fila + meses_visibles,
+        column_config={k: v for k, v in colcfg.items() if k in cols_fila + MESES},
+        key=f"grilla_{hoja}_{origen}_{semestre}_{st.session_state.get(ver_key, 0)}",
     )
+    if cfg.get("tarifa_editable"):
+        _prellenar_tarifa(cfg, editado, st.session_state[ultimo_key], tarifas,
+                          base_key, ultimo_key, ver_key)
     st.session_state[ultimo_key] = editado
 
     with st.expander("Ver descripción de los centros de costo"):
@@ -283,6 +322,31 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
 
 
 _COLS_LEDGER = ["DNI", "NOMBRE", "HORAS_META", "CENTRO_COSTO", "CONCEPTO", "HORAS"]
+
+
+def _prellenar_tarifa(cfg, editado, previo, tarifas, base_key, ultimo_key, ver_key):
+    """Pone la tarifa del catálogo en las filas cuyo TIPO se acaba de elegir
+    o cambiar (o que tienen TIPO y no tienen tarifa). Una tarifa tecleada a
+    mano se respeta mientras no cambie el TIPO.
+
+    El editor no permite cambiar celdas desde el código: se renueva la base
+    con lo editado + la tarifa y se cambia la clave del widget para que no
+    vuelva a aplicar sus ediciones sobre la base nueva."""
+    tipo = editado[cfg["catalogo_key"]]
+    tipo_prev = previo[cfg["catalogo_key"]].reindex(editado.index)
+    sugerida = tipo.map(tarifas)
+    tarifa = pd.to_numeric(editado["TARIFA"], errors="coerce")
+    cambio = tipo.notna() & (tipo != tipo_prev)
+    fijar = (cambio | (tipo.notna() & tarifa.isna())) & sugerida.notna() & (tarifa != sugerida)
+    if not fijar.any():
+        return
+    nuevo = editado.copy()
+    nuevo.loc[fijar, "TARIFA"] = sugerida[fijar]
+    nuevo = nuevo.reset_index(drop=True)
+    st.session_state[base_key] = nuevo
+    st.session_state[ultimo_key] = nuevo
+    st.session_state[ver_key] = st.session_state.get(ver_key, 0) + 1
+    st.rerun()
 
 
 def _semilla_ficha(roster: pd.DataFrame, estructura: pd.DataFrame) -> pd.DataFrame:

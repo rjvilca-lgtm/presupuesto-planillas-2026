@@ -40,9 +40,18 @@ def estimar_importe(hoja: str, df: pd.DataFrame, tarifas: dict) -> float:
     if cfg["metrica"] == "IMPORTE":
         return float(suma_fila.sum())
     if cfg["tarifa"] == "catalogo":
-        tarifa_fila = df[cfg["catalogo_key"]].map(tarifas).fillna(0.0)
-        return float((suma_fila * tarifa_fila).sum())
+        return float((suma_fila * tarifa_por_fila(cfg, df, tarifas)).sum())
     return 0.0  # tarifa server: el importe lo calcula el procedimiento en SQL
+
+
+def tarifa_por_fila(cfg: dict, df: pd.DataFrame, tarifas: dict) -> pd.Series:
+    """La tarifa de la fila si es editable y tiene valor; si no, la del
+    catálogo según el TIPO."""
+    catalogo = df[cfg["catalogo_key"]].map(tarifas)
+    if cfg.get("tarifa_editable") and "TARIFA" in df:
+        propia = pd.to_numeric(df["TARIFA"], errors="coerce")
+        catalogo = propia.where(propia > 0, catalogo)
+    return catalogo.fillna(0.0)
 
 
 def total_horas(hoja: str, df: pd.DataFrame) -> float:
@@ -93,6 +102,9 @@ def validar(hoja: str, df: pd.DataFrame, ccos_validos: set, tarifas: dict) -> li
         if malos:
             errores.append("Estos tipos no tienen tarifa en el catálogo: "
                            + ", ".join(sorted(map(str, malos))))
+        if cfg.get("tarifa_editable") and "TARIFA" in sub:
+            if (pd.to_numeric(sub["TARIFA"], errors="coerce").fillna(0) <= 0).any():
+                errores.append("Hay filas con horas pero sin tarifa (o con tarifa 0).")
 
     return errores
 

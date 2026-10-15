@@ -342,7 +342,9 @@ def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list
     destino = cfg.get("columna_destino", metrica)
     meses = [m for m in MESES if m in df.columns]
 
-    largo = df.melt(id_vars=dims, value_vars=meses,
+    # La tarifa editable viaja como columna propia de la fila
+    ids = dims + (["TARIFA"] if cfg.get("tarifa_editable") and "TARIFA" in df else [])
+    largo = df.melt(id_vars=ids, value_vars=meses,
                     var_name="MES", value_name=metrica)
     largo[metrica] = pd.to_numeric(largo[metrica], errors="coerce").fillna(0.0)
     largo = largo[largo[metrica] > 0]              # solo celdas con valor
@@ -362,5 +364,9 @@ def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list
         reg[destino] = float(r[metrica])
         if cfg["tarifa"] == "catalogo":
             reg["TARIFA"] = float(tarifas[r[cfg["catalogo_key"]]])
+            propia = pd.to_numeric(r.get("TARIFA"), errors="coerce") \
+                if cfg.get("tarifa_editable") else None
+            if propia is not None and pd.notna(propia) and propia > 0:
+                reg["TARIFA"] = float(propia)
         filas.append([reg[c] for c in cols])
     return filas, cols

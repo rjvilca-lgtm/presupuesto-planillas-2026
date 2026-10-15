@@ -17,6 +17,12 @@ Campos:
                             el usuario elige el TIPO, nunca teclea el precio.
                None       → la planilla entrega IMPORTE ya calculado.
   catalogo_key Dimensión contra la que se busca la tarifa (p. ej. "TIPO").
+  tarifa_editable  Con tarifa "catalogo": la grilla muestra la columna TARIFA,
+               prellenada con la del catálogo según el TIPO, y el usuario puede
+               cambiarla. Se guarda en DATOS_ENTRADA.TARIFA.
+  precarga     CSV (ruta relativa al repo) con filas que la grilla trae ya
+               cargadas; sus columnas son dimensiones o columnas_info.
+  columnas_info  Columnas que se muestran en la grilla pero no se guardan.
   usa_roster   Si True, la grilla se pre-puebla con el padrón de docentes del
                departamento para que el usuario solo complete la métrica.
                También activa la ficha por docente (vistas.ficha_docente) en
@@ -145,10 +151,15 @@ PLANILLAS = {
         "dimensiones": ["CONCEPTO", "CONCEPTO_2", "CENTRO_COSTO", "TIPO", "MES"],
         "tarifa": "catalogo",
         "catalogo_key": "TIPO",
+        "tarifa_editable": True,
+        # Lista de Conceptos-horas-adicionales.xlsx (el .xlsx no se sube al repo)
+        "precarga": "data/conceptos_horas_adicionales.csv",
+        "columnas_info": ["FOCO"],
         "usa_roster": False,
         "sps": [("sp_Valorizar_HorasAdicionales_2027", True)],
-        "ayuda": "Elige el tipo (Asistente, Jefe de práctica, Titular) y la "
-                 "tarifa se aplica sola desde el catálogo.",
+        "ayuda": "Los conceptos ya vienen cargados: completa el detalle, el centro "
+                 "de costo, el tipo y las horas. La tarifa se llena con la de 2027 "
+                 "según el tipo y puedes cambiarla. Las filas sin horas no se guardan.",
     },
     "Postgrado": {
         "etiqueta": "Postgrado",
