@@ -8,6 +8,9 @@
       (Horas Adicionales sin TARIFA en la fila, Ayudantías y Carga Académica).
     - Investigación: el DELETE final usaba AÑO='2026' fijo; ahora usa @Anio.
     - Carga Académica: semestres '2027-1' / '2027-2'.
+    - Carga Académica: el sp 2026 cruzaba las tasas de las partidas 036
+      (gratificación, iba al 9 %) y 035 (EsSalud, iba al 18.17 %); aquí cada
+      partida usa su tasa, como en los demás sp. El total no cambia.
     - Cargas sociales y factor de grados desde PARAMETROS_2027
       (sql/crear_parametros_2027.sql): ejecutar ese script antes que este.
   Los sp_*_2026 no se modifican. CREATE OR ALTER: se puede ejecutar de nuevo.
@@ -970,28 +973,28 @@ BEGIN
 
 
     ------------------------------------------------------------
-    -- 6️⃣ CARGAS SOCIALES (9%, 18.17%, 0.94%)
+    -- 6️⃣ CARGAS SOCIALES (gratificación, EsSalud, asignación familiar)
     ------------------------------------------------------------
-    -- Gratificación
+    -- Gratificación (036 = GRATIFICACIONES DOCENTES TP)
     INSERT INTO PLANILLA 
     (CENTRO_COSTO, PARTIDA, DIMENSION, MES, IMPORTE, ORIGEN, DNI, CONCEPTO, HORAS, ORIGEN_2, COMENTARIO, AÑO)
     SELECT 
         p.CENTRO_COSTO, 
         '94.1.1.1.036',
         NULL, p.MES,
-        ROUND(p.IMPORTE * @TasaEssalud, 2),
+        ROUND(p.IMPORTE * @TasaGrat, 2),
         p.ORIGEN, NULL, p.CONCEPTO, NULL, p.ORIGEN_2, NULL, p.AÑO
     FROM PLANILLA p 
     WHERE p.AÑO=2027 AND p.ORIGEN='Carga Academica' AND p.PARTIDA='94.1.1.1.033';
 
-    -- Essalud
+    -- EsSalud (035 = REGIMEN DE PRESTAC.DE SALUD DOCENTES TP)
     INSERT INTO PLANILLA 
     (CENTRO_COSTO, PARTIDA, DIMENSION, MES, IMPORTE, ORIGEN, DNI, CONCEPTO, HORAS, ORIGEN_2, COMENTARIO, AÑO)
     SELECT 
         p.CENTRO_COSTO, 
         '94.1.1.1.035',
         NULL, p.MES,
-        ROUND(p.IMPORTE * @TasaGrat, 2),
+        ROUND(p.IMPORTE * @TasaEssalud, 2),
         p.ORIGEN, NULL, p.CONCEPTO, NULL, p.ORIGEN_2, NULL, p.AÑO
     FROM PLANILLA p 
     WHERE p.AÑO=2027 AND p.ORIGEN='Carga Academica' AND p.PARTIDA='94.1.1.1.033';
