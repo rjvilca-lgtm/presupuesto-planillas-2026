@@ -63,6 +63,24 @@ SEMESTRES = {
 # las filas de este PRESUPUESTO.
 PRESUPUESTO = "PPTO2027"
 
+# Carga académica: la registra la Dirección de Gestión Académica (DGA), no los
+# departamentos. Mismo formato que la hoja "Carga academica.xlsx": por semestre
+# y centro de costo, horas de titulares, jefes de práctica y asistentes. En
+# DATOS_ENTRADA va una fila por concepto con las horas en IMPORTE y el semestre
+# en MES; sp_Valorizar_CargaAcademica_2027 lee esos textos exactos (incluido
+# "ASITENTES", tal como está en el sp y en la hoja).
+CARGA_ACADEMICA = {
+    "hoja": "Carga Academica",
+    "origen": "DGA",
+    "semestres": ["2027-1", "2027-2"],
+    "conceptos": {
+        "# HORAS TITULARES": "# Horas titulares",
+        "# HORAS JEFES DE PRÁCTICA": "# Horas jefes de práctica",
+        "# HORAS ASITENTES": "# Horas asistentes",
+    },
+    "sps": [("sp_Valorizar_CargaAcademica_2027", False)],
+}
+
 # Todas las columnas posibles de DATOS_ENTRADA (unión de las 7 macros).
 COLS_DESTINO = ["HOJA_ORIGEN", "ORIGEN", "DNI", "NOMBRE", "CENTRO_COSTO",
                 "CONCEPTO", "CONCEPTO_2", "TIPO", "MES", "HORAS", "IMPORTE", "TARIFA",

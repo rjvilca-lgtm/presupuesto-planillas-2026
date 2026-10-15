@@ -11,6 +11,7 @@ la interfaz.
 
 import streamlit as st
 
+from src.carga_academica import consulta_carga_academica, registro_carga_academica
 from src.config import cfg_de
 from src.repositorio import crear_repositorio, preparar_filas
 from src.validacion import conteo, estimar_importe, total_horas, validar
@@ -31,6 +32,20 @@ def main():
                 "ninguna base. Para conectar Azure SQL, configura los secrets.",
                 icon="🧪")
 
+    tab_deptos, tab_registro, tab_consulta = st.tabs([
+        "Presupuesto por departamento",
+        "Carga académica · registro (DGA)",
+        "Carga académica · consulta",
+    ])
+    with tab_deptos:
+        vista_departamentos(repo)
+    with tab_registro:
+        registro_carga_academica(repo)
+    with tab_consulta:
+        consulta_carga_academica(repo)
+
+
+def vista_departamentos(repo):
     origen, seleccion = selector_contexto(repo)
     ccos = repo.centros_costo(origen)
     if ccos.empty:

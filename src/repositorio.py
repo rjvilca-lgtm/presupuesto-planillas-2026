@@ -20,7 +20,7 @@ from contextlib import contextmanager
 import pandas as pd
 import streamlit as st
 
-from .config import PRESUPUESTO, cfg_de
+from .config import CARGA_ACADEMICA, PRESUPUESTO, cfg_de
 
 
 # ---------------------------------------------------------------------
@@ -124,6 +124,16 @@ class RepositorioDemo:
     def guardar(self, hoja: str, origen: str, filas: list[list]) -> int:
         # En demo no se persiste; se confirma como si hubiera cargado.
         return len(filas)
+
+    def todos_centros_costo(self) -> pd.DataFrame:
+        filas = sorted({f for lista in _CCOS_DEMO.values() for f in lista})
+        return pd.DataFrame(filas, columns=["CODIGO_CECO", "DESCRIPCION_CECO"])
+
+    def carga_academica(self, actual: bool = True) -> pd.DataFrame:
+        return pd.DataFrame(columns=["MES", "CENTRO_COSTO", "CONCEPTO", "IMPORTE"])
+
+    def limpiar_cache(self):
+        pass
 
 
 # TIMEOUT_CONEXION: segundos que se espera a pytds antes de cortar a la
@@ -282,6 +292,29 @@ class RepositorioSQL:
             "AND NULLIF(LTRIM(RTRIM(de.CONCEPTO)), '') IS NOT NULL "
             "AND LTRIM(RTRIM(de.CONCEPTO)) <> '0' "
             "ORDER BY CODIGO_CECO, CONCEPTO", (origen,))
+
+    def todos_centros_costo(self) -> pd.DataFrame:
+        return self._leer(
+            "SELECT DISTINCT CENTRO_COSTO AS CODIGO_CECO, DESCRIPCION_CC AS DESCRIPCION_CECO "
+            "FROM CENTROS_COSTOS ORDER BY CENTRO_COSTO")
+
+    def carga_academica(self, actual: bool = True) -> pd.DataFrame:
+        """Filas de la hoja Carga Academica en DATOS_ENTRADA. actual=True: las
+        de PRESUPUESTO (2027); False: las del Excel 2026 (PRESUPUESTO NULL),
+        que sirven de punto de partida."""
+        filtro = "PRESUPUESTO = %s" if actual else "PRESUPUESTO IS NULL"
+        params = (CARGA_ACADEMICA["hoja"], CARGA_ACADEMICA["origen"]) + (
+            (PRESUPUESTO,) if actual else ())
+        return self._leer(
+            "SELECT LTRIM(RTRIM(MES)) AS MES, LTRIM(RTRIM(CENTRO_COSTO)) AS CENTRO_COSTO, "
+            "LTRIM(RTRIM(CONCEPTO)) AS CONCEPTO, CAST(IMPORTE AS float) AS IMPORTE "
+            "FROM DATOS_ENTRADA WHERE HOJA_ORIGEN = %s AND ORIGEN = %s AND " + filtro,
+            params)
+
+    def limpiar_cache(self):
+        """Tras guardar: la consulta debe ver lo recién cargado, no la copia
+        cacheada por 10 minutos."""
+        _leer_cacheado.clear()
 
     def guardar(self, hoja: str, origen: str, filas: list[list], cols: list[str],
                 sps: list[tuple]) -> int:
