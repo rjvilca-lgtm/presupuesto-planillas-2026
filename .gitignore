@@ -22,3 +22,8 @@ uploads/
 Thumbs.db
 .vscode/
 .idea/
+
+# Otra app (referencia local, no es parte de este repo)
+traslados-ucsp-main/
+traslados-ucsp-main.zip
+logs.txt

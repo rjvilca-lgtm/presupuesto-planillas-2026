@@ -174,6 +174,21 @@ class RepositorioDemo:
     def fijar_fecha_bloqueo(self, fecha):
         RepositorioDemo._fecha_bloqueo = fecha
 
+    _usuarios: list = []
+
+    def permisos_usuario(self, email: str) -> pd.DataFrame:
+        filas = [u for u in self._usuarios if u["EMAIL"] == email and u.get("ACTIVO", True)]
+        return pd.DataFrame(filas, columns=["ROL", "DEPARTAMENTO"])
+
+    def listar_usuarios(self) -> pd.DataFrame:
+        return pd.DataFrame(self._usuarios, columns=["EMAIL", "ROL", "DEPARTAMENTO", "ACTIVO"])
+
+    def guardar_usuario(self, email, rol, departamento, activo=True):
+        self._usuarios = [u for u in self._usuarios if (u["EMAIL"], u["ROL"], u["DEPARTAMENTO"])
+                          != (email, rol, departamento)]
+        self._usuarios.append({"EMAIL": email, "ROL": rol, "DEPARTAMENTO": departamento,
+                               "ACTIVO": activo})
+
 
 # TIMEOUT_CONEXION: segundos que se espera a pytds antes de cortar a la
 # fuerza. pytds no siempre respeta su propio login_timeout durante el
@@ -493,6 +508,29 @@ class RepositorioSQL:
             f"WHEN NOT MATCHED THEN INSERT (PRESUPUESTO, DEPARTAMENTO, {', '.join(cols)}) "
             f"VALUES (s.PRESUPUESTO, s.DEPARTAMENTO, {', '.join(['%s'] * len(cols))});",
             [PRESUPUESTO, depto] + valores + valores)
+
+    def permisos_usuario(self, email: str) -> pd.DataFrame:
+        """Roles activos del correo (ver sql/crear_usuarios_planillas.sql)."""
+        return self._leer_vivo(
+            "SELECT ROL, DEPARTAMENTO FROM USUARIOS_PLANILLAS "
+            "WHERE LOWER(EMAIL) = %s AND ACTIVO = 1", (email.lower(),))
+
+    def listar_usuarios(self) -> pd.DataFrame:
+        return self._leer_vivo(
+            "SELECT EMAIL, ROL, DEPARTAMENTO, ACTIVO FROM USUARIOS_PLANILLAS "
+            "ORDER BY EMAIL, ROL, DEPARTAMENTO")
+
+    def guardar_usuario(self, email: str, rol: str, departamento, activo: bool = True):
+        """Alta o cambio de un acceso (EMAIL, ROL, DEPARTAMENTO)."""
+        self._escribir(
+            "MERGE USUARIOS_PLANILLAS AS t "
+            "USING (SELECT %s AS EMAIL, %s AS ROL, %s AS DEPARTAMENTO) AS s "
+            "ON LOWER(t.EMAIL) = LOWER(s.EMAIL) AND t.ROL = s.ROL "
+            "AND ISNULL(t.DEPARTAMENTO, '') = ISNULL(s.DEPARTAMENTO, '') "
+            "WHEN MATCHED THEN UPDATE SET t.ACTIVO = %s "
+            "WHEN NOT MATCHED THEN INSERT (EMAIL, ROL, DEPARTAMENTO, ACTIVO) "
+            "VALUES (s.EMAIL, s.ROL, s.DEPARTAMENTO, %s);",
+            [email.lower(), rol, departamento, activo, activo])
 
     def fijar_fecha_bloqueo(self, fecha):
         self._escribir(

@@ -144,14 +144,16 @@ ALTO_PANEL = 470
 CAMPOS_POR_FILA = 3
 
 
-def selector_contexto(repo):
-    """Departamento y planilla. En producción el departamento debe venir del
-    usuario autenticado (SSO); aquí es un selector para la demostración.
+def selector_contexto(repo, permitidos=None):
+    """Departamento y planilla. permitidos: los departamentos del usuario
+    logueado (None = todos, para Presupuesto).
     Las dos hojas TC (I y II semestre) se presentan como una sola opción
     "Plan de trabajo TC": app.py arma las pestañas por semestre a partir de
     TC_HOJAS. Las demás planillas siguen igual, una por una."""
     from .config import PLANILLAS
     deptos = repo.departamentos()
+    if permitidos is not None:
+        deptos = [d for d in deptos if d[0] in set(permitidos)]
     opciones = ["TC"] + [h for h in PLANILLAS if h not in TC_HOJAS] + ["RESUMEN"]
     etiquetas = {"TC": "Plan de trabajo TC", "RESUMEN": "✔ Resumen y valorización",
                  **{h: PLANILLAS[h]["etiqueta"] for h in PLANILLAS}}

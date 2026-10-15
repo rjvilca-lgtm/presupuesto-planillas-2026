@@ -14,6 +14,7 @@ se quiera; el departamento valoriza todo junto desde "Resumen y valorización".
 
 import streamlit as st
 
+from src.auth import barra_usuario, exigir_login
 from src.carga_academica import consulta_carga_academica, registro_carga_academica
 from src.config import cfg_de
 from src.flujo import (aviso_departamento, leer_flujo, marcar, ahora, panel_flujo,
@@ -30,32 +31,37 @@ def main():
     inyectar_estilos()
 
     repo = crear_repositorio()
+    usuario = exigir_login(repo)
     fl = leer_flujo(repo)
 
+    barra_usuario(usuario)
     st.title("Presupuesto de planillas 2026")
     if repo.modo == "demo":
         st.info("Modo demostración: los datos son de ejemplo y no se guardan en "
                 "ninguna base. Para conectar Azure SQL, configura los secrets.",
                 icon="🧪")
 
-    tab_deptos, tab_registro, tab_consulta, tab_admin = st.tabs([
-        "Presupuesto por departamento",
-        "Carga académica · registro (DGA)",
-        "Carga académica · consulta",
-        "Presupuesto · administración",
-    ])
-    with tab_deptos:
-        vista_departamentos(repo, fl)
-    with tab_registro:
-        registro_carga_academica(repo, fl)
-    with tab_consulta:
-        consulta_carga_academica(repo, fl)
-    with tab_admin:
-        vista_admin(repo, fl, repo.departamentos())
+    # Cada rol ve solo sus pestañas; la consulta de carga académica, todos
+    pestañas = []
+    if usuario.presupuesto or usuario.departamentos:
+        pestañas.append(("Presupuesto por departamento",
+                         lambda: vista_departamentos(repo, fl, usuario)))
+    if usuario.presupuesto or usuario.dga:
+        pestañas.append(("Carga académica · registro (DGA)",
+                         lambda: registro_carga_academica(repo, fl)))
+    pestañas.append(("Carga académica · consulta", lambda: consulta_carga_academica(repo, fl)))
+    if usuario.presupuesto:
+        pestañas.append(("Presupuesto · administración",
+                         lambda: vista_admin(repo, fl, repo.departamentos())))
+    for tab, (_, vista) in zip(st.tabs([t for t, _ in pestañas]), pestañas):
+        with tab:
+            vista()
 
 
-def vista_departamentos(repo, fl):
-    origen, seleccion = selector_contexto(repo)
+def vista_departamentos(repo, fl, usuario):
+    # Presupuesto ve todos los departamentos; los demás, solo los suyos
+    permitidos = None if usuario.presupuesto else usuario.departamentos
+    origen, seleccion = selector_contexto(repo, permitidos)
     panel_flujo(fl)
     solo_lectura = aviso_departamento(fl, origen)
 

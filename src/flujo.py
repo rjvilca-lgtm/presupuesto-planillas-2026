@@ -16,7 +16,6 @@ El estado vive en ESTADO_DEPARTAMENTO y CONFIG_PRESUPUESTO
 funciona sin bloqueos y lo avisa en la pestaña de administración.
 """
 
-import hmac
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from html import escape
@@ -324,28 +323,11 @@ def _dialogo_cerrar(repo, origen):
 
 # ---------------------------------------------------------- administración
 
-def _clave_admin():
-    try:
-        return st.secrets["admin"]["clave"]
-    except Exception:
-        return None
-
-
 def vista_admin(repo, fl: Flujo, deptos: list[tuple]):
-    clave = _clave_admin()
-    if not clave:
-        st.info("Para usar esta pestaña, agrega en los secrets de Streamlit:\n\n"
-                "```toml\n[admin]\nclave = \"...\"\n```", icon="🔑")
-        return
-    if not st.session_state.get("_admin_ok"):
-        with st.form("login_admin"):
-            ingreso = st.text_input("Clave de Presupuesto", type="password")
-            if st.form_submit_button("Entrar"):
-                if hmac.compare_digest(ingreso.encode(), str(clave).encode()):
-                    st.session_state["_admin_ok"] = True
-                    st.rerun()
-                st.error("Clave incorrecta.")
-        return
+    """Solo para usuarios con rol PRESUPUESTO (app.py no muestra la pestaña
+    a los demás)."""
+    _admin_usuarios(repo, deptos)
+    st.divider()
     if not fl.disponible:
         st.warning("Faltan las tablas del flujo. Ejecuta `sql/crear_estado_presupuesto.sql` "
                    "en Azure y recarga la página. Mientras tanto no hay bloqueos.", icon="⚠️")
@@ -401,3 +383,45 @@ def vista_admin(repo, fl: Flujo, deptos: list[tuple]):
     st.caption("Desbloquear ignora la fecha de bloqueo para ese departamento. Reabrir "
                "permite que DHUM, DMAT o DCN vuelvan a modificar; mientras no cierren de "
                "nuevo, la carga académica no se puede volver a valorizar.")
+
+
+def _admin_usuarios(repo, deptos: list[tuple]):
+    st.subheader("Usuarios")
+    st.caption("Quién puede entrar con su cuenta @ucsp.edu.pe y qué puede hacer. "
+               "Presupuesto ve todo; DGA registra la carga académica; Departamento "
+               "registra las planillas de ese departamento.")
+    try:
+        usuarios = repo.listar_usuarios()
+    except Exception as ex:
+        st.warning(f"No se pudo leer USUARIOS_PLANILLAS ({ex}). Ejecuta "
+                   "`sql/crear_usuarios_planillas.sql` en Azure.", icon="⚠️")
+        return
+    nombres = dict(deptos)
+    vista = usuarios.assign(
+        ROL=usuarios["ROL"].map({"PRESUPUESTO": "Presupuesto", "DGA": "DGA",
+                                 "DEPARTAMENTO": "Departamento"}),
+        DEPARTAMENTO=usuarios["DEPARTAMENTO"].map(
+            lambda d: f"{d} · {nombres.get(d, '')}" if isinstance(d, str) else ""),
+        ACTIVO=usuarios["ACTIVO"].map(lambda a: "Sí" if a else "No"))
+    st.dataframe(vista.rename(columns={"EMAIL": "Correo", "ROL": "Rol",
+                                       "DEPARTAMENTO": "Departamento", "ACTIVO": "Activo"}),
+                 hide_index=True, width="stretch")
+
+    with st.form("form_usuario", clear_on_submit=True):
+        c1, c2, c3 = st.columns([3, 2, 3])
+        email = c1.text_input("Correo", placeholder="nombre@ucsp.edu.pe")
+        rol = c2.selectbox("Rol", ["DEPARTAMENTO", "DGA", "PRESUPUESTO"],
+                           format_func=lambda r: r.capitalize())
+        depto = c3.selectbox("Departamento (solo rol Departamento)", [d for d, _ in deptos],
+                             format_func=lambda d: f"{d} · {nombres[d]}")
+        b1, b2 = st.columns(2)
+        dar = b1.form_submit_button("Dar acceso", type="primary", width="stretch")
+        quitar = b2.form_submit_button("Quitar acceso", width="stretch")
+    if dar or quitar:
+        email = email.strip().lower()
+        if not email.endswith("@ucsp.edu.pe") or email.count("@") != 1:
+            st.error("Ingresa un correo @ucsp.edu.pe válido.")
+            return
+        repo.guardar_usuario(email, rol, depto if rol == "DEPARTAMENTO" else None,
+                             activo=bool(dar))
+        st.rerun()
