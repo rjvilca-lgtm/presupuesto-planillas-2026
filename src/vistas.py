@@ -18,6 +18,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from .repositorio import matriz_desde_entrada
 from .config import (CONCEPTO_ACADEMICAS, CONCEPTO_CRONOLOGICAS, FACTOR_CRONOLOGICAS,
                      HORAS_PLAN_TC, MESES, MESES_ABBR, SEMESTRES, TOLERANCIA_HORAS,
                      a_hhmm, cfg_de, de_hhmm, dims_fila, es_concepto, meta_horas)
@@ -151,8 +152,8 @@ def selector_contexto(repo):
     TC_HOJAS. Las demás planillas siguen igual, una por una."""
     from .config import PLANILLAS
     deptos = repo.departamentos()
-    opciones = ["TC"] + [h for h in PLANILLAS if h not in TC_HOJAS]
-    etiquetas = {"TC": "Plan de trabajo TC",
+    opciones = ["TC"] + [h for h in PLANILLAS if h not in TC_HOJAS] + ["RESUMEN"]
+    etiquetas = {"TC": "Plan de trabajo TC", "RESUMEN": "✔ Resumen y valorización",
                  **{h: PLANILLAS[h]["etiqueta"] for h in PLANILLAS}}
     col1, col2 = st.columns([1, 2])
     with col1:
@@ -200,12 +201,22 @@ def _columnas_fila(cfg: dict) -> list[str]:
     return cols
 
 
-def _semilla(cfg: dict, roster: pd.DataFrame) -> pd.DataFrame:
+def _semilla(cfg: dict, roster: pd.DataFrame, guardado=None) -> pd.DataFrame:
     """Grilla inicial: dimensiones de fila + una columna por mes.
-    Con padrón, una fila por docente ya identificada; con precarga, las
-    filas del CSV (p. ej. los conceptos de horas adicionales)."""
+    Si hay algo guardado, eso (el usuario retoma donde quedó); con precarga se
+    agregan además los conceptos del CSV que aún no usó. Sin nada guardado:
+    con padrón, una fila por docente; con precarga, las filas del CSV."""
     cols = _columnas_fila(cfg)
-    if cfg["usa_roster"] and not roster.empty:
+    if guardado is not None and not guardado.empty:
+        base = matriz_desde_entrada(cfg["_hoja"], guardado)
+        if cfg.get("precarga"):
+            precarga = _leer_precarga(cfg["precarga"])
+            claves = [c for c in precarga.columns if c in base.columns]
+            usados = set(map(tuple, base[claves].fillna("").astype(str).values))
+            faltan = precarga[[tuple(f) not in usados
+                               for f in precarga[claves].astype(str).values]]
+            base = pd.concat([base, faltan], ignore_index=True)
+    elif cfg["usa_roster"] and not roster.empty:
         base = roster.copy()
     elif cfg.get("precarga"):
         base = _leer_precarga(cfg["precarga"]).copy()
@@ -214,12 +225,13 @@ def _semilla(cfg: dict, roster: pd.DataFrame) -> pd.DataFrame:
     for d in cols:
         if d not in base.columns:
             base[d] = None
-    base = base[cols]
+    base = base[cols + [m for m in MESES if m in base.columns]]
     if "TARIFA" in cols:
         base["TARIFA"] = pd.to_numeric(base["TARIFA"], errors="coerce")
     for m in MESES:
-        base[m] = pd.Series(dtype="float64")
-    return base
+        base[m] = (pd.to_numeric(base[m], errors="coerce") if m in base
+                   else pd.Series(dtype="float64", index=base.index))
+    return base.reset_index(drop=True)
 
 
 def _semestre_activo(hoja: str) -> str:
@@ -234,7 +246,8 @@ def _semestre_activo(hoja: str) -> str:
 
 
 def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
-           tarifas: dict, origen: str) -> pd.DataFrame:
+           tarifas: dict, origen: str, guardado=None,
+           solo_lectura: bool = False) -> pd.DataFrame:
     """data_editor matricial: dimensiones a la izquierda, 12 meses a la derecha
     (solo se muestran los 6 del semestre elegido para reducir el scroll).
 
@@ -300,7 +313,7 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
     sem_key = f"_sem_base_{hoja}_{origen}"
     ver_key = f"_ver_{hoja}_{origen}"
     if base_key not in st.session_state:
-        st.session_state[base_key] = _semilla(cfg, roster)
+        st.session_state[base_key] = _semilla(cfg, roster, guardado)
         st.session_state[ultimo_key] = st.session_state[base_key]
         st.session_state[sem_key] = semestre
     elif st.session_state[sem_key] != semestre:
@@ -308,12 +321,13 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
         st.session_state[sem_key] = semestre
 
     editado = st.data_editor(
-        st.session_state[base_key], num_rows="dynamic", width="stretch",
+        st.session_state[base_key], num_rows="fixed" if solo_lectura else "dynamic",
+        width="stretch", disabled=solo_lectura,
         hide_index=True, column_order=cols_fila + meses_visibles,
         column_config={k: v for k, v in colcfg.items() if k in cols_fila + MESES},
         key=f"grilla_{hoja}_{origen}_{semestre}_{st.session_state.get(ver_key, 0)}",
     )
-    if cfg.get("tarifa_editable"):
+    if cfg.get("tarifa_editable") and not solo_lectura:
         _prellenar_tarifa(cfg, editado, st.session_state[ultimo_key], tarifas,
                           base_key, ultimo_key, ver_key)
     st.session_state[ultimo_key] = editado
@@ -353,19 +367,50 @@ def _prellenar_tarifa(cfg, editado, previo, tarifas, base_key, ultimo_key, ver_k
     st.rerun()
 
 
-def _semilla_ficha(roster: pd.DataFrame, estructura: pd.DataFrame) -> pd.DataFrame:
+def _semilla_ficha(roster: pd.DataFrame, estructura: pd.DataFrame,
+                   guardado=None) -> pd.DataFrame:
     """Ledger inicial de la ficha: una fila por (docente, CECO, concepto),
-    con HORAS=0 (en decimal). Cruce del padrón con la estructura CECO->concepto.
-    HORAS_META: horas cronológicas que debe sumar el docente."""
+    con HORAS en decimal. Cruce del padrón con la estructura CECO->concepto,
+    con las horas guardadas encima (el usuario retoma donde quedó).
+    HORAS_META: horas cronológicas que debe sumar el docente.
+
+    Lo guardado que no esté en el padrón o en la estructura (docente agregado
+    a mano, concepto que salió de la estructura) también entra, para no
+    perder datos."""
     if roster.empty or estructura.empty:
-        return pd.DataFrame(columns=_COLS_LEDGER)
-    cruce = roster.merge(estructura, how="cross")
-    cruce = cruce.rename(columns={"CODIGO_CECO": "CENTRO_COSTO"})
-    if "HORAS_META" not in cruce:
-        cruce["HORAS_META"] = None
-    cruce["HORAS_META"] = cruce["HORAS_META"].map(meta_horas)
-    cruce["HORAS"] = 0.0
-    return cruce[_COLS_LEDGER]
+        base = pd.DataFrame(columns=_COLS_LEDGER)
+    else:
+        base = roster.merge(estructura, how="cross")
+        base = base.rename(columns={"CODIGO_CECO": "CENTRO_COSTO"})
+        if "HORAS_META" not in base:
+            base["HORAS_META"] = None
+        base["HORAS"] = 0.0
+        base = base[_COLS_LEDGER]
+    if guardado is not None and not guardado.empty:
+        clave = ["DNI", "CENTRO_COSTO", "CONCEPTO"]
+        # Una fila por clave: si hubiera repetidas, son copias de un mismo valor
+        g = guardado.groupby(clave, as_index=False).agg(
+            NOMBRE=("NOMBRE", "first"), HORAS_G=("HORAS", "max"))
+        nuevos = g.loc[~g["DNI"].isin(base["DNI"]), ["DNI", "NOMBRE"]].drop_duplicates("DNI")
+        if not nuevos.empty and not estructura.empty:
+            extra = nuevos.merge(estructura.rename(columns={"CODIGO_CECO": "CENTRO_COSTO"}),
+                                 how="cross").assign(HORAS_META=None, HORAS=0.0)
+            base = pd.concat([base, extra[_COLS_LEDGER]], ignore_index=True)
+        # left + lo que sobre al final: conserva el orden del padrón
+        base = base.merge(g, on=clave, how="left", suffixes=("", "_g"))
+        sobrantes = g.merge(base[clave], on=clave, how="left", indicator=True)
+        sobrantes = sobrantes[sobrantes["_merge"] == "left_only"].drop(columns="_merge")
+        base = pd.concat([base, sobrantes.rename(columns={"NOMBRE": "NOMBRE_g"})],
+                         ignore_index=True)
+        base["NOMBRE"] = base["NOMBRE"].fillna(base["NOMBRE_g"])
+        base["HORAS"] = base["HORAS_G"].fillna(base["HORAS"]).fillna(0.0)
+        # Un solo nombre por DNI (el del padrón): la lista agrupa por DNI y nombre
+        base["NOMBRE"] = base["DNI"].map(base.groupby("DNI", sort=False)["NOMBRE"].first())
+        metas = base.groupby("DNI")["HORAS_META"].first()
+        base["HORAS_META"] = base["DNI"].map(metas)
+        base = base[_COLS_LEDGER]
+    base["HORAS_META"] = base["HORAS_META"].map(meta_horas)
+    return base.reset_index(drop=True)
 
 
 def _horas_plan(ledger: pd.DataFrame) -> pd.Series:
@@ -388,7 +433,8 @@ def _completo(horas: float, meta: float) -> bool:
 
 
 def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
-                   roster: pd.DataFrame, origen: str) -> pd.DataFrame:
+                   roster: pd.DataFrame, origen: str, guardado=None,
+                   solo_lectura: bool = False) -> pd.DataFrame:
     """Ficha por docente para las planillas TC: un valor de horas por
     (CECO, concepto): horas por mes, iguales todo el semestre. Devuelve un
     DataFrame con la misma forma que grilla() (dims_fila(cfg) + MESES) para
@@ -408,7 +454,7 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
 
     estado_key = f"_ficha_{cfg['_hoja']}_{origen}"
     if estado_key not in st.session_state:
-        st.session_state[estado_key] = _semilla_ficha(roster, estructura)
+        st.session_state[estado_key] = _semilla_ficha(roster, estructura, guardado)
     ledger = st.session_state[estado_key]
 
     if ledger.empty:
@@ -441,39 +487,40 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
             with st.container(height=ALTO_PANEL - 90, border=False):
                 lista_slot = st.empty()
 
-            with st.expander("➕ Agregar docente fuera del padrón"):
-                st.caption("Usa esto solo si el docente no aparece en el padrón "
-                           "del departamento; es una excepción, no el flujo normal.")
-                c1, c2 = st.columns(2)
-                nuevo_dni = c1.text_input("DNI", key=f"nuevo_dni_{estado_key}")
-                nuevo_nombre = c2.text_input("Nombre completo",
-                                             key=f"nuevo_nombre_{estado_key}")
-                nueva_meta = st.number_input(
-                    "Horas cronológicas del docente", min_value=1.0, max_value=40.0,
-                    value=float(HORAS_PLAN_TC), step=1.0, format="%.0f",
-                    key=f"nueva_meta_{estado_key}")
-                if st.button("Agregar docente", key=f"btn_agregar_{estado_key}"):
-                    dni_limpio = nuevo_dni.strip()
-                    if not dni_limpio or not nuevo_nombre.strip():
-                        st.error("Ingresa DNI y nombre para agregar al docente.",
-                                icon="⚠️")
-                    elif not _DOC_IDENTIDAD.fullmatch(dni_limpio):
-                        st.error("El DNI debe tener 8 dígitos (o 9 a 12 caracteres "
-                                 "alfanuméricos si es carné de extranjería).",
-                                 icon="⚠️")
-                    elif dni_limpio in set(ledger["DNI"]):
-                        st.error("Ese DNI ya está en la ficha.", icon="⚠️")
-                    else:
-                        nuevo = estructura.copy()
-                        nuevo = nuevo.rename(columns={"CODIGO_CECO": "CENTRO_COSTO"})
-                        nuevo["DNI"] = dni_limpio
-                        nuevo["NOMBRE"] = nuevo_nombre.strip()
-                        nuevo["HORAS_META"] = float(nueva_meta)
-                        nuevo["HORAS"] = 0.0
-                        nuevo = nuevo[_COLS_LEDGER]
-                        st.session_state[estado_key] = pd.concat(
-                            [ledger, nuevo], ignore_index=True)
-                        st.rerun()
+            if not solo_lectura:
+                with st.expander("➕ Agregar docente fuera del padrón"):
+                    st.caption("Usa esto solo si el docente no aparece en el padrón "
+                               "del departamento; es una excepción, no el flujo normal.")
+                    c1, c2 = st.columns(2)
+                    nuevo_dni = c1.text_input("DNI", key=f"nuevo_dni_{estado_key}")
+                    nuevo_nombre = c2.text_input("Nombre completo",
+                                                 key=f"nuevo_nombre_{estado_key}")
+                    nueva_meta = st.number_input(
+                        "Horas cronológicas del docente", min_value=1.0, max_value=40.0,
+                        value=float(HORAS_PLAN_TC), step=1.0, format="%.0f",
+                        key=f"nueva_meta_{estado_key}")
+                    if st.button("Agregar docente", key=f"btn_agregar_{estado_key}"):
+                        dni_limpio = nuevo_dni.strip()
+                        if not dni_limpio or not nuevo_nombre.strip():
+                            st.error("Ingresa DNI y nombre para agregar al docente.",
+                                    icon="⚠️")
+                        elif not _DOC_IDENTIDAD.fullmatch(dni_limpio):
+                            st.error("El DNI debe tener 8 dígitos (o 9 a 12 caracteres "
+                                     "alfanuméricos si es carné de extranjería).",
+                                     icon="⚠️")
+                        elif dni_limpio in set(ledger["DNI"]):
+                            st.error("Ese DNI ya está en la ficha.", icon="⚠️")
+                        else:
+                            nuevo = estructura.copy()
+                            nuevo = nuevo.rename(columns={"CODIGO_CECO": "CENTRO_COSTO"})
+                            nuevo["DNI"] = dni_limpio
+                            nuevo["NOMBRE"] = nuevo_nombre.strip()
+                            nuevo["HORAS_META"] = float(nueva_meta)
+                            nuevo["HORAS"] = 0.0
+                            nuevo = nuevo[_COLS_LEDGER]
+                            st.session_state[estado_key] = pd.concat(
+                                [ledger, nuevo], ignore_index=True)
+                            st.rerun()
 
     def _elegir(dni_d):
         st.session_state[activo_key] = dni_d
@@ -539,6 +586,7 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                             # decimal: 03:30 -> 3.5
                             texto = col.text_input(
                                 str(concepto), value=a_hhmm(fila["HORAS"]), key=key,
+                                disabled=solo_lectura,
                                 placeholder="hh:mm", on_change=_normalizar_hhmm, args=(key,),
                                 help="Horas académicas de dictado (45 min), en hh:mm. "
                                      "No suman al total: se convierten a cronológicas."

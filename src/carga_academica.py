@@ -15,6 +15,7 @@ import pandas as pd
 import streamlit as st
 
 from .config import CARGA_ACADEMICA, PRESUPUESTO
+from .flujo import DGA, ahora, marcar, panel_flujo
 
 CA = CARGA_ACADEMICA
 CONCEPTOS = list(CA["conceptos"])
@@ -108,15 +109,20 @@ def _totales(df: pd.DataFrame) -> pd.DataFrame:
     return tot.rename(columns={"MES": "Semestre", **CA["conceptos"]})
 
 
-def registro_carga_academica(repo):
+def registro_carga_academica(repo, fl):
     st.caption("Para la Dirección de Gestión Académica. Registra, por semestre y "
                "centro de costo, las horas de titulares, jefes de práctica y "
-               "asistentes, como en la hoja Carga académica. Al guardar se "
-               "reemplaza la carga 2027 anterior y se valoriza.")
+               "asistentes, como en la hoja Carga académica. Puedes guardar las veces "
+               "que quieras; la valorización se habilita cuando DHUM, DMAT y DCN cierren.")
+    panel_flujo(fl)
     resultado = st.session_state.pop("_resultado_carga_academica", None)
     if resultado:
         ok, mensaje = resultado
         (st.success if ok else st.error)(mensaje, icon="✅" if ok else "🛑")
+
+    bloqueado, motivo = fl.bloqueo(DGA)
+    if bloqueado:
+        st.warning(f"🔒 La carga académica está {motivo}")
 
     ccos = repo.todos_centros_costo()
     if "_base_carga_academica" not in st.session_state:
@@ -126,19 +132,42 @@ def registro_carga_academica(repo):
         st.info(st.session_state["_aviso_carga_academica"], icon="ℹ️")
 
     editado = st.data_editor(
-        st.session_state["_base_carga_academica"], num_rows="dynamic", hide_index=True,
-        width="stretch", column_order=COLS_GRILLA, column_config=_colcfg(ccos, True),
+        st.session_state["_base_carga_academica"],
+        num_rows="fixed" if bloqueado else "dynamic", disabled=bloqueado,
+        hide_index=True, width="stretch", column_order=COLS_GRILLA,
+        column_config=_colcfg(ccos, True),
         key=f"grilla_carga_academica_{st.session_state.get('_ver_carga_academica', 0)}")
 
     st.dataframe(_totales(editado), hide_index=True, width="stretch")
 
-    if st.button("Guardar carga académica", type="primary", width="stretch",
-                 key="btn_guardar_carga_academica"):
+    c_guardar, c_valorizar = st.columns(2)
+    if c_guardar.button("Guardar", type="primary", width="stretch", disabled=bloqueado,
+                        key="btn_guardar_carga_academica"):
         errores = _validar(editado, set(ccos["CODIGO_CECO"]))
         if errores:
             _dialogo_errores(errores)
         else:
-            _dialogo_confirmar(repo, editado)
+            with st.spinner("Guardando…"):
+                try:
+                    filas = _filas_destino(editado)
+                    n = repo.guardar_borrador(CA["hoja"], DGA, filas, COLS_DESTINO)
+                    marcar(repo, DGA, FECHA_GUARDADO=ahora())
+                    res = (True, f"{n} registro(s) de carga académica guardados.")
+                except Exception as ex:
+                    res = (False, f"No se guardó nada; se revirtió la operación. Detalle: {ex}")
+            st.session_state["_resultado_carga_academica"] = res
+            st.rerun()
+
+    # Sin las tablas del flujo no hay a quién esperar: se permite valorizar
+    pendientes = fl.pendientes_carga() if fl.disponible else []
+    if c_valorizar.button("Valorizar carga académica", width="stretch",
+                          disabled=bool(pendientes) or bloqueado,
+                          key="btn_valorizar_carga_academica"):
+        _dialogo_valorizar(repo)
+    if pendientes:
+        c_valorizar.caption("Para valorizar faltan cerrar: " + ", ".join(pendientes) + ".")
+    elif fl.cambios_sin_valorizar(DGA):
+        c_valorizar.caption("Hay cambios guardados sin valorizar.")
 
 
 @st.dialog("Revisa antes de guardar", width="large")
@@ -149,41 +178,31 @@ def _dialogo_errores(errores):
         st.rerun()
 
 
-@st.dialog("Confirmar carga académica", width="large")
-def _dialogo_confirmar(repo, editado):
-    filas = _filas_destino(editado)
-    st.write(f"Se guardarán **{len(filas)}** registro(s) para la carga académica "
-             f"{PRESUPUESTO}.")
-    st.dataframe(_totales(editado), hide_index=True, width="stretch")
-    st.caption("Se reemplaza la carga académica 2027 anterior y se ejecuta la "
-               "valorización. Las horas de dictado de los planes TC se descuentan "
-               "de las horas de titulares.")
+@st.dialog("Valorizar carga académica", width="large")
+def _dialogo_valorizar(repo):
+    st.write("Se valoriza la carga académica **guardada** (si hiciste cambios, "
+             "guárdalos primero). A las horas de titulares se les restan las horas "
+             "académicas de dictado de los planes TC de todos los departamentos tal "
+             "como están en este momento.")
     c1, c2 = st.columns(2)
-    if c1.button("Confirmar y valorizar", type="primary", width="stretch"):
-        with st.spinner("Guardando y valorizando…"):
+    if c1.button("Valorizar", type="primary", width="stretch"):
+        with st.spinner("Valorizando…"):
             try:
-                if repo.modo == "sql":
-                    n = repo.guardar(CA["hoja"], CA["origen"], filas, COLS_DESTINO, CA["sps"])
-                else:
-                    n = repo.guardar(CA["hoja"], CA["origen"], filas)
-                repo.limpiar_cache()
-                resultado = (True, f"{n} registro(s) de carga académica cargados y valorizados.")
-                # La grilla se vuelve a leer de la base en el próximo render
-                st.session_state.pop("_base_carga_academica", None)
-                st.session_state["_ver_carga_academica"] = \
-                    st.session_state.get("_ver_carga_academica", 0) + 1
+                repo.valorizar(DGA, CA["sps"])
+                marcar(repo, DGA, FECHA_VALORIZACION=ahora())
+                res = (True, "Carga académica valorizada.")
             except Exception as ex:
-                resultado = (False, "No se guardó nada; se revirtió la operación. "
-                                    f"Detalle: {ex}")
-        st.session_state["_resultado_carga_academica"] = resultado
+                res = (False, f"No se valorizó nada; se revirtió la operación. Detalle: {ex}")
+        st.session_state["_resultado_carga_academica"] = res
         st.rerun()
     if c2.button("Cancelar", width="stretch"):
         st.rerun()
 
 
-def consulta_carga_academica(repo):
+def consulta_carga_academica(repo, fl):
     st.caption("Carga académica 2027 registrada por la Dirección de Gestión "
                "Académica. Solo lectura.")
+    panel_flujo(fl)
     datos = _a_ancho(repo.carga_academica(actual=True))
     if datos.empty:
         st.info("La Dirección de Gestión Académica aún no ha registrado la carga "

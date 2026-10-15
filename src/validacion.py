@@ -71,13 +71,17 @@ def conteo(df: pd.DataFrame) -> tuple[int, int]:
     return lineas, registros
 
 
-def validar(hoja: str, df: pd.DataFrame, ccos_validos: set, tarifas: dict) -> list[str]:
+def validar(hoja: str, df: pd.DataFrame, ccos_validos: set, tarifas: dict,
+            estricto: bool = True) -> list[str]:
+    """estricto=False para guardar borradores: solo el formato. Las reglas de
+    totales (horas de cada docente TC) se exigen al valorizar."""
     cfg = cfg_de(hoja)
     dims = dims_fila(cfg)
     errores = []
 
     if df.empty or not _filas_con_datos(df).any():
-        return ["Ingresa horas o importes en al menos un mes antes de guardar."]
+        # Un borrador vacío es válido: deja la planilla sin datos
+        return ["Ingresa horas o importes en al menos un mes antes de guardar."]             if estricto else []
 
     val = _matriz_valores(df)
     if (val < 0).any().any():
@@ -100,7 +104,7 @@ def validar(hoja: str, df: pd.DataFrame, ccos_validos: set, tarifas: dict) -> li
             errores.append(f"{_nombre_dim(col).capitalize()} no válido: "
                            + ", ".join(sorted(malos)) + ". Elige uno de la lista.")
 
-    if cfg["usa_roster"]:
+    if cfg["usa_roster"] and estricto:
         errores += _validar_plan_tc(sub, val.loc[sub.index])
 
     if cfg["tarifa"] == "catalogo":

@@ -25,6 +25,9 @@ Campos:
   columnas_info  Columnas que se muestran en la grilla pero no se guardan.
   opciones     {dimensión: [valores]}: la columna se elige de una lista cerrada
                (los sp reconocen esos textos exactos).
+  info_destino {columna_info: columna de DATOS_ENTRADA} para guardar (y volver
+               a leer) una columna informativa; p. ej. FOCO va en TIPO_BLOQUE,
+               que ningún sp usa.
   usa_roster   Si True, la grilla se pre-puebla con el padrón de docentes del
                departamento para que el usuario solo complete la métrica.
                También activa la ficha por docente (vistas.ficha_docente) en
@@ -81,10 +84,16 @@ CARGA_ACADEMICA = {
     "sps": [("sp_Valorizar_CargaAcademica_2027", False)],
 }
 
+# Flujo de valorización. Los departamentos guardan borradores las veces que
+# quieran y valorizan cuando terminan. Estos tres tienen docentes que dictan
+# en centros de costo de otros departamentos: deben valorizar y CERRAR antes
+# de que la DGA pueda valorizar la carga académica.
+DEPTOS_PRIMERO = ["DHUM", "DMAT", "DCN"]
+
 # Todas las columnas posibles de DATOS_ENTRADA (unión de las 7 macros).
 COLS_DESTINO = ["HOJA_ORIGEN", "ORIGEN", "DNI", "NOMBRE", "CENTRO_COSTO",
                 "CONCEPTO", "CONCEPTO_2", "TIPO", "MES", "HORAS", "IMPORTE", "TARIFA",
-                "PRESUPUESTO"]
+                "PRESUPUESTO", "TIPO_BLOQUE"]
 
 # Plan de trabajo TC: las horas se planifican en horas cronológicas.
 # El dictado se programa en horas académicas (45 min), así que el usuario
@@ -175,6 +184,7 @@ PLANILLAS = {
         # Lista de Conceptos-horas-adicionales.xlsx (el .xlsx no se sube al repo)
         "precarga": "data/conceptos_horas_adicionales.csv",
         "columnas_info": ["FOCO"],
+        "info_destino": {"FOCO": "TIPO_BLOQUE"},
         "usa_roster": False,
         "sps": [("sp_Valorizar_HorasAdicionales_2027", True)],
         "ayuda": "Los conceptos ya vienen cargados: completa el detalle, el centro "

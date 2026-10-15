@@ -20,7 +20,14 @@ from contextlib import contextmanager
 import pandas as pd
 import streamlit as st
 
-from .config import CARGA_ACADEMICA, CONCEPTO_ACADEMICAS, PRESUPUESTO, cfg_de
+from .config import (CARGA_ACADEMICA, CONCEPTO_ACADEMICAS, MESES, PLANILLAS,
+                     PRESUPUESTO, cfg_de, dims_fila)
+
+# Columnas de DATOS_ENTRADA que se leen para retomar lo guardado
+COLS_ENTRADA = ["HOJA_ORIGEN", "DNI", "NOMBRE", "CENTRO_COSTO", "CONCEPTO", "CONCEPTO_2",
+                "TIPO", "TIPO_BLOQUE", "MES", "HORAS", "IMPORTE", "TARIFA"]
+CAMPOS_ESTADO = {"BLOQUEO", "CERRADO", "FECHA_GUARDADO", "FECHA_VALORIZACION",
+                 "FECHA_CIERRE"}
 
 
 # ---------------------------------------------------------------------
@@ -138,6 +145,34 @@ class RepositorioDemo:
     def limpiar_cache(self):
         pass
 
+    # En demo lo guardado y el estado viven en memoria del proceso
+    _entrada: dict = {}
+    _estados: dict = {}
+    _fecha_bloqueo = None
+
+    def guardar_borrador(self, hoja, origen, filas, cols) -> int:
+        df = pd.DataFrame(filas, columns=cols)
+        self._entrada[(hoja, origen)] = df.reindex(columns=COLS_ENTRADA).assign(HOJA_ORIGEN=hoja)
+        return len(filas)
+
+    def entrada(self, origen: str) -> pd.DataFrame:
+        partes = [df for (h, o), df in self._entrada.items() if o == origen]
+        return pd.concat(partes, ignore_index=True) if partes else pd.DataFrame(columns=COLS_ENTRADA)
+
+    def valorizar(self, origen: str, sps: list[tuple]) -> None:
+        pass
+
+    def estado_flujo(self):
+        filas = [{"DEPARTAMENTO": d, **e} for d, e in self._estados.items()]
+        return pd.DataFrame(filas), self._fecha_bloqueo, True
+
+    def actualizar_estado(self, depto: str, **campos):
+        assert set(campos) <= CAMPOS_ESTADO
+        self._estados.setdefault(depto, {}).update(campos)
+
+    def fijar_fecha_bloqueo(self, fecha):
+        RepositorioDemo._fecha_bloqueo = fecha
+
 
 # TIMEOUT_CONEXION: segundos que se espera a pytds antes de cortar a la
 # fuerza. pytds no siempre respeta su propio login_timeout durante el
@@ -196,6 +231,12 @@ def _leer_cacheado(server, port, database, user, password,
         return pd.DataFrame(cur.fetchall(), columns=columnas)
     finally:
         conn.close()
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _leer_corto(server, port, database, user, password,
+                sql: str, params: tuple) -> pd.DataFrame:
+    return _leer_cacheado.__wrapped__(server, port, database, user, password, sql, params)
 
 
 class RepositorioSQL:
@@ -337,6 +378,95 @@ class RepositorioSQL:
         """Tras guardar: la consulta debe ver lo recién cargado, no la copia
         cacheada por 10 minutos."""
         _leer_cacheado.clear()
+        _leer_corto.clear()
+
+    def _leer_vivo(self, sql: str, params: tuple = ()) -> pd.DataFrame:
+        """Datos que cambian con el trabajo de los usuarios (borradores,
+        estados): caché de pocos segundos, que se limpia al escribir."""
+        return _leer_corto(self._server, self._port, self._database,
+                           self._user, self._password, sql, params)
+
+    def entrada(self, origen: str) -> pd.DataFrame:
+        """Todo lo guardado en DATOS_ENTRADA por el departamento para este
+        PRESUPUESTO (todas las planillas). Sirve para retomar el trabajo y para
+        el resumen antes de valorizar."""
+        df = self._leer_vivo(
+            f"SELECT {', '.join(COLS_ENTRADA)} FROM DATOS_ENTRADA "
+            "WHERE ORIGEN = %s AND PRESUPUESTO = %s", (origen, PRESUPUESTO))
+        for c in ("HORAS", "IMPORTE", "TARIFA"):
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        return df
+
+    def guardar_borrador(self, hoja: str, origen: str, filas: list[list],
+                         cols: list[str]) -> int:
+        """Reemplaza lo guardado de la planilla sin valorizar."""
+        n = self.guardar(hoja, origen, filas, cols, [])
+        self.limpiar_cache()
+        return n
+
+    def valorizar(self, origen: str, sps: list[tuple]) -> None:
+        """Ejecuta los sp en una sola transacción: si uno falla, ninguno queda."""
+        print(f"[valorizar] {origen}: {[s for s, _ in sps]}", flush=True)
+        with self._conn() as conn:
+            cur = conn.cursor()
+            try:
+                for sp, lleva_origen in sps:
+                    if lleva_origen:
+                        cur.execute(f"EXEC {sp} @OrigenEntrada = %s", [origen])
+                    else:
+                        cur.execute(f"EXEC {sp}")
+                    print(f"[valorizar] EXEC {sp} ok", flush=True)
+                conn.commit()
+                print("[valorizar] COMMIT", flush=True)
+            except Exception as e:
+                conn.rollback()
+                print(f"[valorizar] ROLLBACK por error: {e!r}", flush=True)
+                raise
+        self.limpiar_cache()
+
+    def estado_flujo(self):
+        """(estados por departamento, fecha de bloqueo, tablas disponibles).
+        Si aún no se ejecutó sql/crear_estado_presupuesto.sql, devuelve
+        disponible=False y la app funciona sin bloqueos."""
+        existe = self._leer_vivo(
+            "SELECT OBJECT_ID('dbo.ESTADO_DEPARTAMENTO', 'U') AS E, "
+            "OBJECT_ID('dbo.CONFIG_PRESUPUESTO', 'U') AS C")
+        if existe["E"].iloc[0] is None or existe["C"].iloc[0] is None:
+            return pd.DataFrame(), None, False
+        estados = self._leer_vivo(
+            "SELECT DEPARTAMENTO, BLOQUEO, CERRADO, FECHA_GUARDADO, FECHA_VALORIZACION, "
+            "FECHA_CIERRE FROM ESTADO_DEPARTAMENTO WHERE PRESUPUESTO = %s", (PRESUPUESTO,))
+        cfg = self._leer_vivo(
+            "SELECT FECHA_BLOQUEO FROM CONFIG_PRESUPUESTO WHERE PRESUPUESTO = %s",
+            (PRESUPUESTO,))
+        fecha = cfg["FECHA_BLOQUEO"].iloc[0] if not cfg.empty else None
+        return estados, fecha, True
+
+    def _escribir(self, sql: str, params: list):
+        with self._conn() as conn:
+            cur = conn.cursor()
+            cur.execute(sql, params)
+            conn.commit()
+        _leer_corto.clear()
+
+    def actualizar_estado(self, depto: str, **campos):
+        cols = [c for c in campos if c in CAMPOS_ESTADO]
+        assert cols and len(cols) == len(campos), campos
+        valores = [campos[c] for c in cols]
+        sets = ", ".join(f"t.{c} = %s" for c in cols)
+        self._escribir(
+            "MERGE ESTADO_DEPARTAMENTO AS t "
+            "USING (SELECT %s AS PRESUPUESTO, %s AS DEPARTAMENTO) AS s "
+            "ON t.PRESUPUESTO = s.PRESUPUESTO AND t.DEPARTAMENTO = s.DEPARTAMENTO "
+            f"WHEN MATCHED THEN UPDATE SET {sets}, t.ACTUALIZADO = SYSDATETIME() "
+            f"WHEN NOT MATCHED THEN INSERT (PRESUPUESTO, DEPARTAMENTO, {', '.join(cols)}) "
+            f"VALUES (s.PRESUPUESTO, s.DEPARTAMENTO, {', '.join(['%s'] * len(cols))});",
+            [PRESUPUESTO, depto] + valores + valores)
+
+    def fijar_fecha_bloqueo(self, fecha):
+        self._escribir(
+            "UPDATE CONFIG_PRESUPUESTO SET FECHA_BLOQUEO = %s, ACTUALIZADO = SYSDATETIME() "
+            "WHERE PRESUPUESTO = %s", [fecha, PRESUPUESTO])
 
     def guardar(self, hoja: str, origen: str, filas: list[list], cols: list[str],
                 sps: list[tuple]) -> int:
@@ -351,6 +481,15 @@ class RepositorioSQL:
         with self._conn() as conn:
             cur = conn.cursor()
             try:
+                # Un solo guardado a la vez por planilla y departamento: dos
+                # guardados cruzados (doble clic, dos pestañas) hacían DELETE,
+                # DELETE, INSERT, INSERT y dejaban las filas duplicadas.
+                cur.execute(
+                    "DECLARE @r int; EXEC @r = sp_getapplock @Resource = %s, "
+                    "@LockMode = 'Exclusive', @LockOwner = 'Transaction', "
+                    "@LockTimeout = 30000; IF @r < 0 THROW 50020, "
+                    "'Otro guardado de esta planilla está en curso; intenta de nuevo.', 1;",
+                    [f"DATOS_ENTRADA|{PRESUPUESTO}|{hoja}|{origen}"])
                 cur.execute(sql_delete, [hoja, origen, PRESUPUESTO])
                 print(f"[guardar] DELETE previo: {cur.rowcount} fila(s)", flush=True)
                 cur.executemany(sql_insert, filas)
@@ -384,6 +523,50 @@ def crear_repositorio():
     return RepositorioDemo()
 
 
+def matriz_desde_entrada(hoja: str, filas: pd.DataFrame) -> pd.DataFrame:
+    """Lo inverso de preparar_filas(): filas guardadas de una planilla ->
+    matriz con una columna por mes (y las columnas info / TARIFA). Filas con
+    las mismas dimensiones se suman en una sola."""
+    cfg = cfg_de(hoja)
+    dims = dims_fila(cfg)
+    destino = cfg.get("columna_destino", cfg["metrica"])
+    info = cfg.get("info_destino", {})
+    extra = ["TARIFA"] if cfg.get("tarifa_editable") else []
+    claves = list(info) + dims + extra
+    f = filas.copy()
+    for col, origen_col in info.items():
+        f[col] = f[origen_col]
+    mes = pd.to_numeric(f["MES"], errors="coerce")
+    f = f[mes.between(1, 12)]
+    if f.empty:
+        return pd.DataFrame(columns=claves + MESES)
+    f["MES"] = mes[f.index].astype(int).map(lambda m: MESES[m - 1])
+    f["_valor"] = pd.to_numeric(f[destino], errors="coerce").fillna(0.0)
+    # Ficha TC: una fila por (docente, CECO, concepto); si hubiera repetidas son
+    # copias del mismo valor. En las grillas, filas iguales sí se suman.
+    agg = "max" if cfg["usa_roster"] else "sum"
+    ancho = (f.groupby(claves + ["MES"], dropna=False, sort=False)["_valor"].agg(agg)
+              .unstack("MES").reset_index())
+    for m in MESES:
+        if m not in ancho:
+            ancho[m] = float("nan")
+    ancho[MESES] = ancho[MESES].where(ancho[MESES] != 0)
+    ancho.columns.name = None
+    return ancho[claves + MESES]
+
+
+def sps_departamento() -> list[tuple]:
+    """Procedimientos que valorizan un departamento: los de todas sus
+    planillas, sin repetir, sin la carga académica (la valoriza la DGA)."""
+    vistos, sps = set(), []
+    for cfg in PLANILLAS.values():
+        for sp, lleva in cfg["sps"]:
+            if sp not in vistos and sp not in dict(CARGA_ACADEMICA["sps"]):
+                vistos.add(sp)
+                sps.append((sp, lleva))
+    return sps
+
+
 def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list, list]:
     """Derrite la matriz (meses en columnas) a formato largo para DATOS_ENTRADA:
     un registro por cada celda mensual con valor > 0. Aplica la tarifa desde el
@@ -399,6 +582,7 @@ def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list
 
     # La tarifa editable viaja como columna propia de la fila
     ids = dims + (["TARIFA"] if cfg.get("tarifa_editable") and "TARIFA" in df else [])
+    ids += [c for c in cfg.get("info_destino", {}) if c in df]
     largo = df.melt(id_vars=ids, value_vars=meses,
                     var_name="MES", value_name=metrica)
     largo[metrica] = pd.to_numeric(largo[metrica], errors="coerce").fillna(0.0)
@@ -406,6 +590,8 @@ def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list
     largo["MES"] = largo["MES"].map(lambda m: str(MESES.index(m) + 1))
 
     cols = ["PRESUPUESTO", "HOJA_ORIGEN", "ORIGEN"] + cfg["dimensiones"] + [destino]
+    info_destino = cfg.get("info_destino", {})
+    cols += list(info_destino.values())
     tarifas = {}
     if cfg["tarifa"] == "catalogo":
         cols.append("TARIFA")
@@ -417,6 +603,8 @@ def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list
         for dim in cfg["dimensiones"]:               # incluye MES
             reg[dim] = r[dim]
         reg[destino] = float(r[metrica])
+        for col, col_destino in info_destino.items():
+            reg[col_destino] = r[col] if col in largo and pd.notna(r[col]) else None
         if cfg["tarifa"] == "catalogo":
             reg["TARIFA"] = float(tarifas[r[cfg["catalogo_key"]]])
             propia = pd.to_numeric(r.get("TARIFA"), errors="coerce") \
