@@ -17,7 +17,9 @@ from html import escape
 import pandas as pd
 import streamlit as st
 
-from .config import MESES, MESES_ABBR, SEMESTRES, cfg_de, dims_fila
+from .config import (CONCEPTO_ACADEMICAS, CONCEPTO_CRONOLOGICAS, FACTOR_CRONOLOGICAS,
+                     HORAS_PLAN_TC, MESES, MESES_ABBR, SEMESTRES, TOLERANCIA_HORAS,
+                     cfg_de, dims_fila, es_concepto)
 from .validacion import formato_soles
 
 
@@ -79,6 +81,11 @@ CSS = """
                         padding: .5rem .85rem; min-width: 100px; }
   .detail-head .total .numero { font-size: 1.2rem; font-weight: 700; color: #17233B; }
   .detail-head .total .etiqueta { font-size: .62rem; color: #7A8496; letter-spacing: .2px; }
+  .detail-head .total.completo { background: #ECFDF3; }
+  .detail-head .total.completo .numero { color: #067647; }
+  .detail-head .total.incompleto { background: #FFF6ED; }
+  .detail-head .total.incompleto .numero { color: #B45309; }
+  .detail-head .total .falta { font-size: .68rem; color: #B45309; margin-top: .1rem; }
 
   div[class*="st-key-ceco_"] { padding: .7rem 1rem .4rem; margin-bottom: .2rem; }
   .ceco-card-header { display: flex; justify-content: space-between; align-items: baseline;
@@ -279,6 +286,17 @@ def _semilla_ficha(roster: pd.DataFrame, estructura: pd.DataFrame) -> pd.DataFra
     return cruce[["DNI", "NOMBRE", "CENTRO_COSTO", "CONCEPTO", "HORAS"]]
 
 
+def _horas_plan(ledger: pd.DataFrame) -> pd.Series:
+    """Horas cronológicas por docente: todo menos las académicas de dictado
+    (ya entran convertidas en las cronológicas)."""
+    plan = ledger[~ledger["CONCEPTO"].map(lambda c: es_concepto(c, CONCEPTO_ACADEMICAS))]
+    return plan.groupby("DNI")["HORAS"].sum()
+
+
+def _completo(horas: float) -> bool:
+    return abs(horas - HORAS_PLAN_TC) <= TOLERANCIA_HORAS
+
+
 def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                    roster: pd.DataFrame, origen: str) -> pd.DataFrame:
     """Ficha por docente para las planillas TC: un valor de horas por
@@ -376,11 +394,13 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
             dni_d, nombre_d = fila_doc["DNI"], fila_doc["NOMBRE"]
             h = horas_por_docente.get(dni_d, 0.0)
             activo = dni_d == st.session_state[activo_key]
+            icono = (":material/check_circle:" if _completo(h)
+                     else ":material/error:" if h > 0
+                     else ":material/radio_button_unchecked:")
             with st.container(key=f"docitem_{estado_key}_{dni_d}"):
-                st.button(f"**{nombre_d}**  \nDNI {dni_d} · {h:,.1f} h/mes",
+                st.button(f"**{nombre_d}**  \nDNI {dni_d} · {h:,.2f} / {HORAS_PLAN_TC} h",
                           key=f"docsel_{estado_key}_{dni_d}", width="stretch",
-                          icon=":material/check_circle:" if h > 0
-                          else ":material/radio_button_unchecked:",
+                          icon=icono,
                           type="primary" if activo else "secondary",
                           on_click=_elegir, args=(dni_d,))
 
@@ -399,22 +419,42 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
             with st.container(border=True, key=f"ceco_{estado_key}_{dni_sel}_{ceco}"):
                 cabecera = st.empty()
                 subtotal = 0.0
-                filas = list(grupo.iterrows())
+                # Las académicas primero: las cronológicas se calculan de ellas
+                # en esta misma pasada.
+                filas = sorted(grupo.iterrows(), key=lambda par: not es_concepto(
+                    par[1]["CONCEPTO"], CONCEPTO_ACADEMICAS))
+                academicas = 0.0
                 for i in range(0, len(filas), CAMPOS_POR_FILA):
                     cols = st.columns(CAMPOS_POR_FILA, gap="medium")
                     for col, (idx, fila) in zip(cols, filas[i:i + CAMPOS_POR_FILA]):
-                        key = f"h_{estado_key}_{dni_sel}_{ceco}_{fila['CONCEPTO']}"
-                        valor = col.number_input(
-                            str(fila["CONCEPTO"]), min_value=0.0,
-                            value=float(fila["HORAS"]), step=0.5, format="%.1f", key=key)
+                        concepto = fila["CONCEPTO"]
+                        key = f"h_{estado_key}_{dni_sel}_{ceco}_{concepto}"
+                        if es_concepto(concepto, CONCEPTO_CRONOLOGICAS):
+                            # Calculada, no editable: se fija antes de crear el widget
+                            valor = academicas * FACTOR_CRONOLOGICAS
+                            st.session_state[key] = valor
+                            col.number_input(
+                                str(concepto), min_value=0.0, format="%.2f", key=key,
+                                disabled=True,
+                                help="Se calcula sola: horas académicas × 45/60.")
+                        else:
+                            valor = col.number_input(
+                                str(concepto), min_value=0.0, value=float(fila["HORAS"]),
+                                step=0.5, format="%.1f", key=key,
+                                help="Horas académicas de dictado (45 min). No suman al "
+                                     "total: se convierten a cronológicas."
+                                if es_concepto(concepto, CONCEPTO_ACADEMICAS) else None)
                         ledger.loc[idx, "HORAS"] = valor
-                        subtotal += valor
+                        if es_concepto(concepto, CONCEPTO_ACADEMICAS):
+                            academicas = valor
+                        else:
+                            subtotal += valor
                 total_docente += subtotal
                 cabecera.markdown(
                     f'<div class="ceco-card-header"><div class="titulo">'
                     f'{escape(str(desc_ceco.get(ceco, ceco)))}'
                     f'<span class="codigo-ceco">{escape(str(ceco))}</span></div>'
-                    f'<div class="subtotal"><b>{subtotal:,.1f}</b> h/mes</div></div>',
+                    f'<div class="subtotal"><b>{subtotal:,.2f}</b> h</div></div>',
                     unsafe_allow_html=True)
 
         # Clave por docente: al cambiar de docente el panel vuelve arriba
@@ -437,6 +477,13 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                      args=(docentes["DNI"].iloc[min(pos + 1, len(docentes) - 1)],))
 
         nombre_sel = docentes.loc[docentes["DNI"] == dni_sel, "NOMBRE"].iloc[0]
+        diferencia = HORAS_PLAN_TC - total_docente
+        if _completo(total_docente):
+            estado_total, aviso = "completo", ""
+        else:
+            estado_total = "incompleto"
+            aviso = (f'<div class="falta">Faltan {diferencia:,.2f} h</div>' if diferencia > 0
+                     else f'<div class="falta">Sobran {-diferencia:,.2f} h</div>')
         with detalle_head_slot.container():
             st.markdown(
                 f"""<div class="detail-head">
@@ -444,17 +491,18 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                         <div class="nombre">{escape(str(nombre_sel))}</div>
                         <div class="dni">DNI {escape(str(dni_sel))}</div>
                       </div>
-                      <div class="total">
-                        <div class="numero">{total_docente:,.1f}</div>
-                        <div class="etiqueta">HORAS / MES</div>
+                      <div class="total {estado_total}">
+                        <div class="numero">{total_docente:,.2f} / {HORAS_PLAN_TC}</div>
+                        <div class="etiqueta">HORAS CRONOLÓGICAS</div>{aviso}
                       </div>
                     </div>""",
                 unsafe_allow_html=True,
             )
 
-    horas_lista = ledger.groupby("DNI")["HORAS"].sum()
-    pendientes = int((horas_lista.reindex(docentes["DNI"]).fillna(0) <= 0).sum())
-    extra = f'<span class="pendientes">{pendientes} sin horas</span>' if pendientes else ""
+    horas_lista = _horas_plan(ledger).reindex(docentes["DNI"], fill_value=0.0)
+    pendientes = int((~horas_lista.map(_completo)).sum())
+    extra = (f'<span class="pendientes">{pendientes} sin completar {HORAS_PLAN_TC} h</span>'
+             if pendientes else "")
     cabecera_slot.markdown(
         f'<div class="people-header"><span>DOCENTES ({len(docentes)})</span>{extra}</div>',
         unsafe_allow_html=True)
@@ -463,20 +511,19 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
 
     st.session_state[estado_key] = ledger
 
-    horas_por_docente = ledger.groupby("DNI")["HORAS"].sum()
-    con_horas = int((horas_por_docente > 0).sum())
-    horas_total = float(ledger["HORAS"].sum())
+    con_horas = int(horas_lista.map(_completo).sum())
+    horas_total = float(horas_lista.sum())
     pct = (con_horas / len(docentes)) if len(docentes) else 0.0
     with resumen_slot.container():
         st.markdown(
             f"""<div class="resumen-tc">
                   <div class="metric">
                     <div class="value">{con_horas} / {len(docentes)}</div>
-                    <div class="label">Docentes cargados</div>
+                    <div class="label">Docentes con {HORAS_PLAN_TC} h</div>
                   </div>
                   <div class="metric">
                     <div class="value">{horas_total:,.1f} h</div>
-                    <div class="label">Horas por mes asignadas</div>
+                    <div class="label">Horas cronológicas asignadas</div>
                   </div>
                   <div class="progress-wrap">
                     <div class="progress-title">Progreso de carga · {pct * 100:.0f}%</div>

@@ -93,20 +93,32 @@ def _renderizar_ficha_tc(repo, hoja, cfg, ccos, roster, estructura, tarifas, ori
         clic_guardar = c_btn.button("Guardar cambios", type="primary",
                                     width="stretch", key=f"btn_guardar_{hoja}")
     if clic_guardar:
+        # Diálogo emergente para errores y confirmación: quedan a la vista,
+        # no al final de la página detrás de la barra fija.
         errores = validar(hoja, editado, ccos_validos, tarifas)
         if errores:
-            for e in errores:
-                st.error(e, icon="⚠️")
-            return
-        # Diálogo emergente: la confirmación queda a la vista, no al final
-        # de la página detrás de la barra fija.
-        _dialogo_confirmar(repo, hoja, origen, editado)
+            _dialogo_errores(errores)
+        else:
+            _dialogo_confirmar(repo, hoja, origen, editado)
+
+
+@st.dialog("Revisa antes de guardar", width="large")
+def _dialogo_errores(errores):
+    for e in errores:
+        st.error(e, icon="⚠️")
+    if st.button("Volver a la ficha", type="primary", width="stretch"):
+        st.rerun()
 
 
 @st.dialog("Confirmar carga", width="large")
 def _dialogo_confirmar(repo, hoja, origen, editado):
     cfg = cfg_de(hoja)
     st.write(f"Planilla **{cfg['etiqueta']}** · Departamento **{origen}**")
+    sin_horas = editado["DNI"].nunique() - editado.loc[
+        editado[cfg["mes_carga"]] > 0, "DNI"].nunique()
+    if sin_horas:
+        st.warning(f"{sin_horas} docente(s) sin horas no se incluirán en la carga.",
+                   icon="ℹ️")
     resumen_por_ceco(hoja, editado)
     st.caption("Al confirmar se reemplaza la carga anterior de esta "
                "planilla para este departamento y se ejecuta la valorización.")

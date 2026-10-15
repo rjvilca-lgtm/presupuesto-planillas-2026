@@ -60,6 +60,21 @@ COLS_DESTINO = ["HOJA_ORIGEN", "ORIGEN", "DNI", "NOMBRE", "CENTRO_COSTO",
                 "CONCEPTO", "CONCEPTO_2", "TIPO", "MES", "HORAS", "IMPORTE", "TARIFA",
                 "PRESUPUESTO"]
 
+# Plan de trabajo TC: las horas se planifican en horas cronológicas.
+# El dictado se programa en horas académicas (45 min), así que el usuario
+# teclea las académicas y las cronológicas se calculan (× 45/60). Las
+# académicas no cuentan para el total, que debe ser exactamente HORAS_PLAN_TC.
+CONCEPTO_ACADEMICAS = "Horas Dictado Pregrado (académicas)"
+CONCEPTO_CRONOLOGICAS = "Horas Dictado Pregrado (cronológicas)"
+FACTOR_CRONOLOGICAS = 45 / 60
+HORAS_PLAN_TC = 40
+TOLERANCIA_HORAS = 0.01
+
+
+def es_concepto(valor, concepto: str) -> bool:
+    return str(valor).strip().lower() == concepto.lower()
+
+
 PLANILLAS = {
     "1. Plan TC-I": {
         "etiqueta": "Plan de trabajo TC · I semestre",
@@ -70,7 +85,9 @@ PLANILLAS = {
         "mes_carga": "MARZO",
         "sps": [("sp_ValorizarPlanilla_Total_2027", True),
                 ("sp_Valorizar_CargaAcademica_2027", False)],
-        "ayuda": "Registra las horas de cada docente por centro de costo. "
+        "ayuda": "Registra las horas de cada docente por centro de costo: "
+                 "deben sumar 40 horas cronológicas. Las horas académicas de "
+                 "dictado se convierten solas a cronológicas (× 45/60). "
                  "El importe se calcula al valorizar.",
     },
     "Plan TC-II": {
@@ -82,7 +99,9 @@ PLANILLAS = {
         "mes_carga": "AGOSTO",
         "sps": [("sp_ValorizarPlanilla_Total_2027", True),
                 ("sp_Valorizar_CargaAcademica_2027", False)],
-        "ayuda": "Registra las horas de cada docente por centro de costo. "
+        "ayuda": "Registra las horas de cada docente por centro de costo: "
+                 "deben sumar 40 horas cronológicas. Las horas académicas de "
+                 "dictado se convierten solas a cronológicas (× 45/60). "
                  "El importe se calcula al valorizar.",
     },
     "Horas Adicionales": {

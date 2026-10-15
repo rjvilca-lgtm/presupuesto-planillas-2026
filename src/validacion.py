@@ -8,7 +8,8 @@ dinámico se ignoran) y se estima el monto para el feedback en vivo.
 
 import pandas as pd
 
-from .config import MESES, cfg_de, dims_fila
+from .config import (CONCEPTO_ACADEMICAS, HORAS_PLAN_TC, MESES, TOLERANCIA_HORAS,
+                     cfg_de, dims_fila, es_concepto)
 
 
 def formato_soles(valor: float) -> str:
@@ -84,6 +85,9 @@ def validar(hoja: str, df: pd.DataFrame, ccos_validos: set, tarifas: dict) -> li
         errores.append("Estos centros de costo no pertenecen a tu departamento: "
                        + ", ".join(sorted(map(str, fuera))))
 
+    if cfg["usa_roster"]:
+        errores += _validar_plan_tc(sub, val.loc[sub.index])
+
     if cfg["tarifa"] == "catalogo":
         malos = set(sub[cfg["catalogo_key"]].dropna()) - set(tarifas)
         if malos:
@@ -91,6 +95,22 @@ def validar(hoja: str, df: pd.DataFrame, ccos_validos: set, tarifas: dict) -> li
                            + ", ".join(sorted(map(str, malos))))
 
     return errores
+
+
+def _validar_plan_tc(sub: pd.DataFrame, val: pd.DataFrame) -> list[str]:
+    """Cada docente con horas debe sumar exactamente HORAS_PLAN_TC horas
+    cronológicas. Las académicas no cuentan: ya están en las cronológicas."""
+    cronologicas = ~sub["CONCEPTO"].map(lambda c: es_concepto(c, CONCEPTO_ACADEMICAS))
+    total = val[cronologicas].sum(axis=1).groupby(sub.loc[cronologicas, "DNI"]).sum()
+    total = total.reindex(sub["DNI"].unique(), fill_value=0.0)
+    malos = total[(total - HORAS_PLAN_TC).abs() > TOLERANCIA_HORAS]
+    if malos.empty:
+        return []
+    nombres = sub.drop_duplicates("DNI").set_index("DNI")["NOMBRE"]
+    detalle = [f"{nombres.get(dni, dni)} ({h:,.2f} h)" for dni, h in malos.items()]
+    mas = f" y {len(detalle) - 10} más" if len(detalle) > 10 else ""
+    return [f"Cada docente debe sumar {HORAS_PLAN_TC} horas cronológicas (sin contar "
+            f"las académicas). No cumplen: " + "; ".join(detalle[:10]) + mas + "."]
 
 
 def _nombre_dim(dim: str) -> str:
