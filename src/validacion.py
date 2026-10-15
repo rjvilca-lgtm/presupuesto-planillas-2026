@@ -8,8 +8,8 @@ dinámico se ignoran) y se estima el monto para el feedback en vivo.
 
 import pandas as pd
 
-from .config import (CONCEPTO_ACADEMICAS, HORAS_PLAN_TC, MESES, TOLERANCIA_HORAS,
-                     cfg_de, dims_fila, es_concepto)
+from .config import (CONCEPTO_ACADEMICAS, MESES, TOLERANCIA_HORAS, a_hhmm,
+                     cfg_de, dims_fila, es_concepto, meta_horas)
 
 
 def formato_soles(valor: float) -> str:
@@ -98,19 +98,23 @@ def validar(hoja: str, df: pd.DataFrame, ccos_validos: set, tarifas: dict) -> li
 
 
 def _validar_plan_tc(sub: pd.DataFrame, val: pd.DataFrame) -> list[str]:
-    """Cada docente con horas debe sumar exactamente HORAS_PLAN_TC horas
-    cronológicas. Las académicas no cuentan: ya están en las cronológicas."""
+    """Cada docente con horas debe sumar exactamente sus horas (HORAS_META,
+    de HORAS_DOCENTES; 40 si no hay dato) en horas cronológicas. Las
+    académicas no cuentan: ya están en las cronológicas."""
     cronologicas = ~sub["CONCEPTO"].map(lambda c: es_concepto(c, CONCEPTO_ACADEMICAS))
     total = val[cronologicas].sum(axis=1).groupby(sub.loc[cronologicas, "DNI"]).sum()
     total = total.reindex(sub["DNI"].unique(), fill_value=0.0)
-    malos = total[(total - HORAS_PLAN_TC).abs() > TOLERANCIA_HORAS]
+    unicos = sub.drop_duplicates("DNI").set_index("DNI")
+    metas = (unicos["HORAS_META"] if "HORAS_META" in unicos
+             else pd.Series(index=unicos.index, dtype=float)).map(meta_horas)
+    malos = total[(total - metas.reindex(total.index)).abs() > TOLERANCIA_HORAS]
     if malos.empty:
         return []
-    nombres = sub.drop_duplicates("DNI").set_index("DNI")["NOMBRE"]
-    detalle = [f"{nombres.get(dni, dni)} ({h:,.2f} h)" for dni, h in malos.items()]
+    detalle = [f"{unicos['NOMBRE'].get(dni, dni)} ({a_hhmm(h)} de {a_hhmm(metas[dni])})"
+               for dni, h in malos.items()]
     mas = f" y {len(detalle) - 10} más" if len(detalle) > 10 else ""
-    return [f"Cada docente debe sumar {HORAS_PLAN_TC} horas cronológicas (sin contar "
-            f"las académicas). No cumplen: " + "; ".join(detalle[:10]) + mas + "."]
+    return ["Cada docente debe sumar exactamente sus horas cronológicas (sin contar "
+            "las académicas). No cumplen: " + "; ".join(detalle[:10]) + mas + "."]
 
 
 def _nombre_dim(dim: str) -> str:

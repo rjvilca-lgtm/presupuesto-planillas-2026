@@ -96,6 +96,10 @@ def _renderizar_ficha_tc(repo, hoja, cfg, ccos, roster, estructura, tarifas, ori
         # Diálogo emergente para errores y confirmación: quedan a la vista,
         # no al final de la página detrás de la barra fija.
         errores = validar(hoja, editado, ccos_validos, tarifas)
+        invalidos = st.session_state.get(f"_invalidos_{hoja}") or []
+        if invalidos:
+            errores.insert(0, "Hay horas mal escritas (usa hh:mm, por ejemplo 03:30) en: "
+                           + ", ".join(invalidos) + ".")
         if errores:
             _dialogo_errores(errores)
         else:

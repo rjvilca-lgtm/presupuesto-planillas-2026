@@ -63,7 +63,8 @@ COLS_DESTINO = ["HOJA_ORIGEN", "ORIGEN", "DNI", "NOMBRE", "CENTRO_COSTO",
 # Plan de trabajo TC: las horas se planifican en horas cronológicas.
 # El dictado se programa en horas académicas (45 min), así que el usuario
 # teclea las académicas y las cronológicas se calculan (× 45/60). Las
-# académicas no cuentan para el total, que debe ser exactamente HORAS_PLAN_TC.
+# académicas no cuentan para el total, que debe ser exactamente las horas del
+# docente en HORAS_DOCENTES.HORAS (HORAS_META); HORAS_PLAN_TC si no las tiene.
 CONCEPTO_ACADEMICAS = "Horas Dictado Pregrado (académicas)"
 CONCEPTO_CRONOLOGICAS = "Horas Dictado Pregrado (cronológicas)"
 FACTOR_CRONOLOGICAS = 45 / 60
@@ -73,6 +74,38 @@ TOLERANCIA_HORAS = 0.01
 
 def es_concepto(valor, concepto: str) -> bool:
     return str(valor).strip().lower() == concepto.lower()
+
+
+def meta_horas(valor) -> float:
+    """Horas que debe sumar el docente; HORAS_PLAN_TC si no hay dato."""
+    try:
+        v = float(valor)
+    except (TypeError, ValueError):
+        return float(HORAS_PLAN_TC)
+    return v if v > 0 else float(HORAS_PLAN_TC)
+
+
+def a_hhmm(horas: float) -> str:
+    """3.5 -> '03:30'. La ficha muestra y recibe las horas en este formato;
+    en la base se guardan en decimal."""
+    minutos = int(round(float(horas) * 60))
+    return f"{minutos // 60:02d}:{minutos % 60:02d}"
+
+
+def de_hhmm(texto) -> float | None:
+    """'03:30' -> 3.5; '3' -> 3.0; vacío -> 0.0. None si no es válido
+    (minutos fuera de 0-59, negativos o texto)."""
+    t = str(texto or "").strip()
+    if not t:
+        return 0.0
+    partes = t.split(":")
+    if len(partes) > 2 or not all(p.isdigit() for p in partes):
+        return None
+    horas = int(partes[0])
+    minutos = int(partes[1]) if len(partes) == 2 else 0
+    if minutos > 59:
+        return None
+    return horas + minutos / 60
 
 
 PLANILLAS = {
@@ -85,10 +118,11 @@ PLANILLAS = {
         "mes_carga": "MARZO",
         "sps": [("sp_ValorizarPlanilla_Total_2027", True),
                 ("sp_Valorizar_CargaAcademica_2027", False)],
-        "ayuda": "Registra las horas de cada docente por centro de costo: "
-                 "deben sumar 40 horas cronológicas. Las horas académicas de "
-                 "dictado se convierten solas a cronológicas (× 45/60). "
-                 "El importe se calcula al valorizar.",
+        "ayuda": "Registra las horas de cada docente por centro de costo en formato "
+                 "hh:mm (por ejemplo 03:30). Deben sumar las horas cronológicas "
+                 "del docente (40 h, o las que tenga asignadas). Las horas "
+                 "académicas de dictado se convierten solas a cronológicas "
+                 "(× 45/60). El importe se calcula al valorizar.",
     },
     "Plan TC-II": {
         "etiqueta": "Plan de trabajo TC · II semestre",
@@ -99,10 +133,11 @@ PLANILLAS = {
         "mes_carga": "AGOSTO",
         "sps": [("sp_ValorizarPlanilla_Total_2027", True),
                 ("sp_Valorizar_CargaAcademica_2027", False)],
-        "ayuda": "Registra las horas de cada docente por centro de costo: "
-                 "deben sumar 40 horas cronológicas. Las horas académicas de "
-                 "dictado se convierten solas a cronológicas (× 45/60). "
-                 "El importe se calcula al valorizar.",
+        "ayuda": "Registra las horas de cada docente por centro de costo en formato "
+                 "hh:mm (por ejemplo 03:30). Deben sumar las horas cronológicas "
+                 "del docente (40 h, o las que tenga asignadas). Las horas "
+                 "académicas de dictado se convierten solas a cronológicas "
+                 "(× 45/60). El importe se calcula al valorizar.",
     },
     "Horas Adicionales": {
         "etiqueta": "Horas adicionales",

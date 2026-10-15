@@ -106,7 +106,7 @@ class RepositorioDemo:
 
     def roster(self, origen: str) -> pd.DataFrame:
         filas = _ROSTER_DEMO.get(origen, [])
-        return pd.DataFrame(filas, columns=["DNI", "NOMBRE"])
+        return pd.DataFrame(filas, columns=["DNI", "NOMBRE"]).assign(HORAS_META=40.0)
 
     def estructura_tc(self, origen: str) -> pd.DataFrame:
         """CECO -> conceptos para la ficha por docente (planillas TC).
@@ -239,9 +239,13 @@ class RepositorioSQL:
         return {t: float(v) for t, v in zip(df["TIPO"], df["TARIFA"])}
 
     def roster(self, origen: str) -> pd.DataFrame:
-        return self._leer(
-            "SELECT DISTINCT DNI, NOMBRE FROM HORAS_DOCENTES WHERE DPTO = %s "
-            "ORDER BY NOMBRE", (origen,))
+        """Padrón del departamento. HORAS_META: horas cronológicas que debe
+        sumar el plan de trabajo del docente (40, o menos si es carga parcial)."""
+        df = self._leer(
+            "SELECT DNI, NOMBRE, MAX(HORAS) AS HORAS_META FROM HORAS_DOCENTES "
+            "WHERE DPTO = %s GROUP BY DNI, NOMBRE ORDER BY NOMBRE", (origen,))
+        df["HORAS_META"] = pd.to_numeric(df["HORAS_META"], errors="coerce")
+        return df
 
     def estructura_tc(self, origen: str) -> pd.DataFrame:
         """CECO -> conceptos de la ficha TC para el departamento.

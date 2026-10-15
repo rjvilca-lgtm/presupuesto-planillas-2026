@@ -19,7 +19,7 @@ import streamlit as st
 
 from .config import (CONCEPTO_ACADEMICAS, CONCEPTO_CRONOLOGICAS, FACTOR_CRONOLOGICAS,
                      HORAS_PLAN_TC, MESES, MESES_ABBR, SEMESTRES, TOLERANCIA_HORAS,
-                     cfg_de, dims_fila, es_concepto)
+                     a_hhmm, cfg_de, de_hhmm, dims_fila, es_concepto, meta_horas)
 from .validacion import formato_soles
 
 
@@ -97,9 +97,16 @@ CSS = """
   .ceco-card-header .subtotal { font-size: .78rem; color: #667085; white-space: nowrap; }
   .ceco-card-header .subtotal b { color: #17233B; }
 
-  div[class*="st-key-ceco_"] div[data-testid="stNumberInput"] label p {
+  div[class*="st-key-ceco_"] div[data-testid="stTextInput"] label p {
       font-size: .8rem; color: #344054; }
-  div[class*="st-key-ceco_"] div[data-testid="stNumberInput"] { max-width: 230px; }
+  /* etiquetas de 1 o 2 líneas con el mismo alto: los campos quedan alineados */
+  div[class*="st-key-ceco_"] div[data-testid="stTextInput"] label {
+      min-height: 2.5rem; align-items: flex-end; }
+  div[class*="st-key-ceco_"] div[data-testid="stTextInput"] { max-width: 230px; }
+  div[class*="st-key-ceco_"] div[data-testid="stTextInput"] input {
+      background: #F3F5F8; text-align: right; font-weight: 600; color: #25324A;
+      font-variant-numeric: tabular-nums; }
+  .hhmm-error { color: #B42318; font-size: .72rem; margin-top: -.6rem; }
   /* sin botones +/-: las horas se teclean, y así el campo ocupa menos */
   div[class*="st-key-ceco_"] button[data-testid="stNumberInputStepUp"],
   div[class*="st-key-ceco_"] button[data-testid="stNumberInputStepDown"] { display: none; }
@@ -275,15 +282,22 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
     return editado
 
 
+_COLS_LEDGER = ["DNI", "NOMBRE", "HORAS_META", "CENTRO_COSTO", "CONCEPTO", "HORAS"]
+
+
 def _semilla_ficha(roster: pd.DataFrame, estructura: pd.DataFrame) -> pd.DataFrame:
     """Ledger inicial de la ficha: una fila por (docente, CECO, concepto),
-    con HORAS=0. Cruce del padrón con la estructura CECO->concepto."""
+    con HORAS=0 (en decimal). Cruce del padrón con la estructura CECO->concepto.
+    HORAS_META: horas cronológicas que debe sumar el docente."""
     if roster.empty or estructura.empty:
-        return pd.DataFrame(columns=["DNI", "NOMBRE", "CENTRO_COSTO", "CONCEPTO", "HORAS"])
+        return pd.DataFrame(columns=_COLS_LEDGER)
     cruce = roster.merge(estructura, how="cross")
     cruce = cruce.rename(columns={"CODIGO_CECO": "CENTRO_COSTO"})
+    if "HORAS_META" not in cruce:
+        cruce["HORAS_META"] = None
+    cruce["HORAS_META"] = cruce["HORAS_META"].map(meta_horas)
     cruce["HORAS"] = 0.0
-    return cruce[["DNI", "NOMBRE", "CENTRO_COSTO", "CONCEPTO", "HORAS"]]
+    return cruce[_COLS_LEDGER]
 
 
 def _horas_plan(ledger: pd.DataFrame) -> pd.Series:
@@ -293,8 +307,16 @@ def _horas_plan(ledger: pd.DataFrame) -> pd.Series:
     return plan.groupby("DNI")["HORAS"].sum()
 
 
-def _completo(horas: float) -> bool:
-    return abs(horas - HORAS_PLAN_TC) <= TOLERANCIA_HORAS
+def _normalizar_hhmm(key: str):
+    """Al salir del campo: '6:30' o '6' se reescribe como '06:30' / '06:00'.
+    Lo inválido se deja tal cual para que el usuario vea qué corregir."""
+    valor = de_hhmm(st.session_state.get(key))
+    if valor is not None:
+        st.session_state[key] = a_hhmm(valor)
+
+
+def _completo(horas: float, meta: float) -> bool:
+    return abs(horas - meta) <= TOLERANCIA_HORAS
 
 
 def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
@@ -327,6 +349,7 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
         return pd.DataFrame(columns=dims + MESES)
 
     docentes = ledger[["DNI", "NOMBRE"]].drop_duplicates().reset_index(drop=True)
+    metas = ledger.drop_duplicates("DNI").set_index("DNI")["HORAS_META"].map(meta_horas)
     resumen_slot = st.empty()
 
     activo_key = f"_docente_activo_{estado_key}"
@@ -340,7 +363,7 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
         with st.container(key=f"people_card_{estado_key}"):
             # Placeholders: el encabezado (pendientes) y las horas por docente
             # solo reflejan lo recién tecleado si se llenan después de recorrer
-            # los number_input del docente activo (mismo motivo que resumen_slot).
+            # los campos del docente activo (mismo motivo que resumen_slot).
             cabecera_slot = st.empty()
             filtro = st.text_input(
                 "Buscar docente", key=f"buscar_{estado_key}",
@@ -357,6 +380,10 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                 nuevo_dni = c1.text_input("DNI", key=f"nuevo_dni_{estado_key}")
                 nuevo_nombre = c2.text_input("Nombre completo",
                                              key=f"nuevo_nombre_{estado_key}")
+                nueva_meta = st.number_input(
+                    "Horas cronológicas del docente", min_value=1.0, max_value=40.0,
+                    value=float(HORAS_PLAN_TC), step=1.0, format="%.0f",
+                    key=f"nueva_meta_{estado_key}")
                 if st.button("Agregar docente", key=f"btn_agregar_{estado_key}"):
                     dni_limpio = nuevo_dni.strip()
                     if not dni_limpio or not nuevo_nombre.strip():
@@ -373,8 +400,9 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                         nuevo = nuevo.rename(columns={"CODIGO_CECO": "CENTRO_COSTO"})
                         nuevo["DNI"] = dni_limpio
                         nuevo["NOMBRE"] = nuevo_nombre.strip()
+                        nuevo["HORAS_META"] = float(nueva_meta)
                         nuevo["HORAS"] = 0.0
-                        nuevo = nuevo[["DNI", "NOMBRE", "CENTRO_COSTO", "CONCEPTO", "HORAS"]]
+                        nuevo = nuevo[_COLS_LEDGER]
                         st.session_state[estado_key] = pd.concat(
                             [ledger, nuevo], ignore_index=True)
                         st.rerun()
@@ -393,12 +421,13 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
         for _, fila_doc in visibles.iterrows():
             dni_d, nombre_d = fila_doc["DNI"], fila_doc["NOMBRE"]
             h = horas_por_docente.get(dni_d, 0.0)
+            meta = metas[dni_d]
             activo = dni_d == st.session_state[activo_key]
-            icono = (":material/check_circle:" if _completo(h)
+            icono = (":material/check_circle:" if _completo(h, meta)
                      else ":material/error:" if h > 0
                      else ":material/radio_button_unchecked:")
             with st.container(key=f"docitem_{estado_key}_{dni_d}"):
-                st.button(f"**{nombre_d}**  \nDNI {dni_d} · {h:,.2f} / {HORAS_PLAN_TC} h",
+                st.button(f"**{nombre_d}**  \nDNI {dni_d} · {a_hhmm(h)} / {a_hhmm(meta)} h",
                           key=f"docsel_{estado_key}_{dni_d}", width="stretch",
                           icon=icono,
                           type="primary" if activo else "secondary",
@@ -406,11 +435,12 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
 
     with col_detalle:
         # Placeholder: nombre + total de horas se pintan juntos al final,
-        # cuando ya se conoce el total tras recorrer los number_input.
+        # cuando ya se conoce el total tras recorrer los campos.
         detalle_head_slot = st.empty()
 
         sub = ledger[ledger["DNI"] == dni_sel]
         total_docente = 0.0
+        invalidos = []
 
         def _tarjeta_ceco(ceco, grupo):
             """Un CECO a todo el ancho, con sus conceptos en filas de
@@ -432,18 +462,25 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                         if es_concepto(concepto, CONCEPTO_CRONOLOGICAS):
                             # Calculada, no editable: se fija antes de crear el widget
                             valor = academicas * FACTOR_CRONOLOGICAS
-                            st.session_state[key] = valor
-                            col.number_input(
-                                str(concepto), min_value=0.0, format="%.2f", key=key,
-                                disabled=True,
+                            st.session_state[key] = a_hhmm(valor)
+                            col.text_input(
+                                str(concepto), key=key, disabled=True,
                                 help="Se calcula sola: horas académicas × 45/60.")
                         else:
-                            valor = col.number_input(
-                                str(concepto), min_value=0.0, value=float(fila["HORAS"]),
-                                step=0.5, format="%.1f", key=key,
-                                help="Horas académicas de dictado (45 min). No suman al "
-                                     "total: se convierten a cronológicas."
+                            # hh:mm en pantalla; en el ledger (y en la base) va en
+                            # decimal: 03:30 -> 3.5
+                            texto = col.text_input(
+                                str(concepto), value=a_hhmm(fila["HORAS"]), key=key,
+                                placeholder="hh:mm", on_change=_normalizar_hhmm, args=(key,),
+                                help="Horas académicas de dictado (45 min), en hh:mm. "
+                                     "No suman al total: se convierten a cronológicas."
                                 if es_concepto(concepto, CONCEPTO_ACADEMICAS) else None)
+                            valor = de_hhmm(texto)
+                            if valor is None:
+                                invalidos.append(str(concepto))
+                                col.markdown('<div class="hhmm-error">Usa hh:mm, por '
+                                             'ejemplo 03:30</div>', unsafe_allow_html=True)
+                                valor = float(fila["HORAS"])
                         ledger.loc[idx, "HORAS"] = valor
                         if es_concepto(concepto, CONCEPTO_ACADEMICAS):
                             academicas = valor
@@ -454,7 +491,7 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                     f'<div class="ceco-card-header"><div class="titulo">'
                     f'{escape(str(desc_ceco.get(ceco, ceco)))}'
                     f'<span class="codigo-ceco">{escape(str(ceco))}</span></div>'
-                    f'<div class="subtotal"><b>{subtotal:,.2f}</b> h</div></div>',
+                    f'<div class="subtotal"><b>{a_hhmm(subtotal)}</b> h</div></div>',
                     unsafe_allow_html=True)
 
         # Clave por docente: al cambiar de docente el panel vuelve arriba
@@ -477,13 +514,14 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                      args=(docentes["DNI"].iloc[min(pos + 1, len(docentes) - 1)],))
 
         nombre_sel = docentes.loc[docentes["DNI"] == dni_sel, "NOMBRE"].iloc[0]
-        diferencia = HORAS_PLAN_TC - total_docente
-        if _completo(total_docente):
+        meta_sel = metas[dni_sel]
+        diferencia = meta_sel - total_docente
+        if _completo(total_docente, meta_sel):
             estado_total, aviso = "completo", ""
         else:
             estado_total = "incompleto"
-            aviso = (f'<div class="falta">Faltan {diferencia:,.2f} h</div>' if diferencia > 0
-                     else f'<div class="falta">Sobran {-diferencia:,.2f} h</div>')
+            aviso = (f'<div class="falta">Faltan {a_hhmm(diferencia)} h</div>' if diferencia > 0
+                     else f'<div class="falta">Sobran {a_hhmm(-diferencia)} h</div>')
         with detalle_head_slot.container():
             st.markdown(
                 f"""<div class="detail-head">
@@ -492,7 +530,7 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                         <div class="dni">DNI {escape(str(dni_sel))}</div>
                       </div>
                       <div class="total {estado_total}">
-                        <div class="numero">{total_docente:,.2f} / {HORAS_PLAN_TC}</div>
+                        <div class="numero">{a_hhmm(total_docente)} / {a_hhmm(meta_sel)}</div>
                         <div class="etiqueta">HORAS CRONOLÓGICAS</div>{aviso}
                       </div>
                     </div>""",
@@ -500,9 +538,13 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
             )
 
     horas_lista = _horas_plan(ledger).reindex(docentes["DNI"], fill_value=0.0)
-    pendientes = int((~horas_lista.map(_completo)).sum())
-    extra = (f'<span class="pendientes">{pendientes} sin completar {HORAS_PLAN_TC} h</span>'
+    completos = pd.Series([_completo(h, metas[d]) for d, h in horas_lista.items()],
+                          index=horas_lista.index, dtype=bool)
+    pendientes = int((~completos).sum())
+    extra = (f'<span class="pendientes">{pendientes} sin completar sus horas</span>'
              if pendientes else "")
+    # Para que el guardado se bloquee si hay un hh:mm mal escrito
+    st.session_state[f"_invalidos_{cfg['_hoja']}"] = invalidos
     cabecera_slot.markdown(
         f'<div class="people-header"><span>DOCENTES ({len(docentes)})</span>{extra}</div>',
         unsafe_allow_html=True)
@@ -511,7 +553,7 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
 
     st.session_state[estado_key] = ledger
 
-    con_horas = int(horas_lista.map(_completo).sum())
+    con_horas = int(completos.sum())
     horas_total = float(horas_lista.sum())
     pct = (con_horas / len(docentes)) if len(docentes) else 0.0
     with resumen_slot.container():
@@ -519,10 +561,10 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
             f"""<div class="resumen-tc">
                   <div class="metric">
                     <div class="value">{con_horas} / {len(docentes)}</div>
-                    <div class="label">Docentes con {HORAS_PLAN_TC} h</div>
+                    <div class="label">Docentes con sus horas completas</div>
                   </div>
                   <div class="metric">
-                    <div class="value">{horas_total:,.1f} h</div>
+                    <div class="value">{a_hhmm(horas_total)} h</div>
                     <div class="label">Horas cronológicas asignadas</div>
                   </div>
                   <div class="progress-wrap">
@@ -538,7 +580,8 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
     salida = ledger.copy()
     for m in MESES:
         salida[m] = salida["HORAS"] if m == cfg["mes_carga"] else 0.0
-    return salida[dims + MESES]
+    # HORAS_META viaja para la validación; preparar_filas() no la usa
+    return salida[dims + MESES + ["HORAS_META"]]
 
 
 def resumen_por_ceco(hoja: str, df: pd.DataFrame):
