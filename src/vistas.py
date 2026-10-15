@@ -256,7 +256,8 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
     El editor recibe siempre la MISMA base mientras se edita: con
     num_rows="dynamic" la identidad del widget depende de los datos, así que
     devolverle su propia salida lo reinicia y pierde ediciones. La base solo
-    se renueva (con lo último editado) al cambiar de semestre. Los 12 meses
+    se renueva (con lo último editado) cuando el editor se vuelve a crear:
+    al cambiar de semestre, de planilla o de pestaña. Los 12 meses
     viajan en los datos y column_order oculta los 6 del otro semestre, así que
     no hace falta emparejar filas entre semestres."""
     hoja = cfg["_hoja"]
@@ -312,22 +313,23 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
     cols_fila = _columnas_fila(cfg)
     base_key = f"_base_{hoja}_{origen}"
     ultimo_key = f"_ultimo_{hoja}_{origen}"
-    sem_key = f"_sem_base_{hoja}_{origen}"
     ver_key = f"_ver_{hoja}_{origen}"
+    widget_key = f"grilla_{hoja}_{origen}_{semestre}_{st.session_state.get(ver_key, 0)}"
     if base_key not in st.session_state:
         st.session_state[base_key] = _semilla(cfg, roster, guardado)
         st.session_state[ultimo_key] = st.session_state[base_key]
-        st.session_state[sem_key] = semestre
-    elif st.session_state[sem_key] != semestre:
+    elif widget_key not in st.session_state:
+        # El editor se vuelve a crear (cambio de semestre, de planilla o de
+        # pestaña): Streamlit ya olvidó sus ediciones, así que arranca de lo
+        # último editado y no de la base anterior.
         st.session_state[base_key] = st.session_state[ultimo_key].reset_index(drop=True)
-        st.session_state[sem_key] = semestre
 
     editado = st.data_editor(
         st.session_state[base_key], num_rows="fixed" if solo_lectura else "dynamic",
         width="stretch", disabled=solo_lectura,
         hide_index=True, column_order=cols_fila + meses_visibles,
         column_config={k: v for k, v in colcfg.items() if k in cols_fila + MESES},
-        key=f"grilla_{hoja}_{origen}_{semestre}_{st.session_state.get(ver_key, 0)}",
+        key=widget_key,
     )
     if cfg.get("tarifa_editable") and not solo_lectura:
         _prellenar_tarifa(cfg, editado, st.session_state[ultimo_key], tarifas,

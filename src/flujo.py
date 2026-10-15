@@ -326,10 +326,12 @@ def _dialogo_cerrar(repo, origen):
 ROLES = {"DEPARTAMENTO": "Departamento", "DGA": "DGA",
          "DESARROLLO_HUMANO": "Desarrollo Humano", "PRESUPUESTO": "Presupuesto"}
 
-def vista_admin(repo, fl: Flujo, deptos: list[tuple]):
+def vista_admin(repo, fl: Flujo, deptos: list[tuple], usuario):
     """Solo para usuarios con rol PRESUPUESTO (app.py no muestra la pestaña
     a los demás)."""
     _admin_usuarios(repo, deptos)
+    st.divider()
+    _admin_parametros(repo, usuario)
     st.divider()
     if not fl.disponible:
         st.warning("Faltan las tablas del flujo. Ejecuta `sql/crear_estado_presupuesto.sql` "
@@ -386,6 +388,68 @@ def vista_admin(repo, fl: Flujo, deptos: list[tuple]):
     st.caption("Desbloquear ignora la fecha de bloqueo para ese departamento. Reabrir "
                "permite que DHUM, DMAT o DCN vuelvan a modificar; mientras no cierren de "
                "nuevo, la carga académica no se puede volver a valorizar.")
+
+
+def _equivale(codigo: str, valor: float) -> str:
+    return f"× {valor:.4f}" if codigo.startswith("FACTOR") else f"{valor * 100:.2f} %"
+
+
+def _admin_parametros(repo, usuario):
+    st.subheader("Parámetros de valorización 2027")
+    st.caption("Cargas sociales y factor de grados que usan los procedimientos al valorizar. "
+               "Se escriben como proporción: 0.1817 = 18.17 %. Un cambio se aplica a partir "
+               "de la próxima valorización; los departamentos ya valorizados mantienen el "
+               "cálculo anterior hasta que se valoricen de nuevo.")
+    resultado = st.session_state.pop("_res_parametros", None)
+    if resultado:
+        (st.success if resultado[0] else st.error)(resultado[1],
+                                                   icon="✅" if resultado[0] else "🛑")
+    try:
+        base = repo.parametros()
+    except Exception as ex:
+        st.warning(f"No se pudieron leer los parámetros ({type(ex).__name__}).", icon="⚠️")
+        return
+    if base is None:
+        st.warning("Falta la tabla de parámetros. Ejecuta `sql/crear_parametros_2027.sql` y "
+                   "luego `sql/crear_sps_2027.sql` en Azure.", icon="⚠️")
+        return
+    base = base.assign(EQUIVALE=[_equivale(c, v) for c, v in zip(base["CODIGO"], base["VALOR"])])
+    editado = st.data_editor(
+        base[["CODIGO", "DESCRIPCION", "VALOR", "EQUIVALE", "ACTUALIZADO", "EMAIL"]],
+        hide_index=True, width="stretch", num_rows="fixed",
+        key=f"ed_parametros_{st.session_state.get('_ver_parametros', 0)}",
+        column_order=["DESCRIPCION", "VALOR", "EQUIVALE", "ACTUALIZADO", "EMAIL"],
+        column_config={
+            "DESCRIPCION": st.column_config.TextColumn("Parámetro", disabled=True, width="large"),
+            "VALOR": st.column_config.NumberColumn("Valor", min_value=0.0, max_value=5.0,
+                                                   format="%.4f", step=0.0001, required=True),
+            "EQUIVALE": st.column_config.TextColumn("Equivale a", disabled=True),
+            "ACTUALIZADO": st.column_config.DatetimeColumn("Último cambio", disabled=True,
+                                                           format="DD/MM/YYYY HH:mm"),
+            "EMAIL": st.column_config.TextColumn("Por", disabled=True),
+        })
+    cambios = [(b.CODIGO, float(b.VALOR), float(e.VALOR))
+               for b, e in zip(base.itertuples(), editado.itertuples())
+               if pd.notna(e.VALOR) and abs(float(e.VALOR) - float(b.VALOR)) > 1e-9]
+    for codigo, antes, despues in cambios:
+        st.caption(f"{codigo}: {_equivale(codigo, antes)} → **{_equivale(codigo, despues)}**")
+    if st.button("Guardar parámetros", type="primary", disabled=not cambios,
+                 key="btn_guardar_parametros"):
+        try:
+            repo.guardar_parametros(cambios, usuario.email)
+            st.session_state["_res_parametros"] = (
+                True, f"{len(cambios)} parámetro(s) actualizado(s). Valoriza de nuevo los "
+                      "departamentos para aplicarlos.")
+        except Exception as ex:
+            st.session_state["_res_parametros"] = (False, f"No se guardó nada. Detalle: {ex}")
+        st.session_state["_ver_parametros"] = st.session_state.get("_ver_parametros", 0) + 1
+        st.rerun()
+    with st.expander("Historial de cambios de parámetros"):
+        st.dataframe(repo.auditoria_parametros(), hide_index=True, width="stretch",
+                     column_config={"FECHA": st.column_config.DatetimeColumn(
+                         "Fecha", format="DD/MM/YYYY HH:mm"), "EMAIL": "Por",
+                         "DESCRIPCION": "Parámetro", "VALOR_ANTERIOR": "Antes",
+                         "VALOR_NUEVO": "Después"})
 
 
 def _admin_usuarios(repo, deptos: list[tuple]):

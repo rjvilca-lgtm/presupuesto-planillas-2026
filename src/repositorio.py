@@ -189,6 +189,9 @@ class RepositorioDemo:
         return pd.DataFrame(columns=["DEPTO", "ORIGEN", "PARTIDA", "DESCRIPCION",
                                      "CENTRO_COSTO", "MES", "IMPORTE"])
 
+    def parametros(self):
+        return None
+
     def permisos_usuario(self, email: str) -> pd.DataFrame:
         filas = [u for u in self._usuarios if u["EMAIL"] == email and u.get("ACTIVO", True)]
         return pd.DataFrame(filas, columns=["ROL", "DEPARTAMENTO"])
@@ -300,6 +303,15 @@ def _consultar(server, port, database, user, password,
 @st.cache_data(ttl=600, show_spinner=False)
 def _leer_cacheado(server, port, database, user, password,
                    sql: str, params: tuple) -> pd.DataFrame:
+    return _consultar(server, port, database, user, password, sql, params)
+
+
+# Años cerrados (2026): no cambian, así que se guardan medio día y no se
+# borran al guardar. La consulta del resumen 2026 tarda ~10 s en el nivel
+# Basic de Azure; así solo la paga el primer usuario.
+@st.cache_data(ttl=12 * 3600, show_spinner=False)
+def _leer_historico(server, port, database, user, password,
+                    sql: str, params: tuple) -> pd.DataFrame:
     return _consultar(server, port, database, user, password, sql, params)
 
 
@@ -650,6 +662,36 @@ class RepositorioSQL:
         return self._leer_vivo("SELECT TOP 200 FECHA, EMAIL, TABLA, DNI, ACCION, DETALLE "
                                "FROM AUDITORIA_DESARROLLO_HUMANO ORDER BY ID DESC")
 
+    # ------------------------------------------------ Parámetros 2027
+
+    def parametros(self) -> pd.DataFrame | None:
+        """Tasas que leen los sp 2027 (sql/crear_parametros_2027.sql).
+        None si la tabla aún no existe."""
+        existe = self._leer_vivo("SELECT OBJECT_ID('dbo.PARAMETROS_2027', 'U') AS ID")
+        if existe["ID"].iloc[0] is None:
+            return None
+        return self._leer_vivo("SELECT CODIGO, DESCRIPCION, CAST(VALOR AS float) AS VALOR, "
+                               "ACTUALIZADO, EMAIL FROM PARAMETROS_2027 ORDER BY ORDEN")
+
+    def guardar_parametros(self, cambios: list[tuple], email: str):
+        """cambios: (codigo, valor_anterior, valor_nuevo). No son confidenciales:
+        la auditoría guarda los valores."""
+        def trabajo(cur):
+            for codigo, antes, despues in cambios:
+                cur.execute("UPDATE PARAMETROS_2027 SET VALOR = %s, ACTUALIZADO = SYSDATETIME(), "
+                            "EMAIL = %s WHERE CODIGO = %s", [despues, email, codigo])
+                cur.execute("INSERT INTO AUDITORIA_PARAMETROS (EMAIL, CODIGO, VALOR_ANTERIOR, "
+                            "VALOR_NUEVO) VALUES (%s, %s, %s, %s)", [email, codigo, antes, despues])
+        self._transaccion(self._conn(), trabajo)
+
+    def auditoria_parametros(self) -> pd.DataFrame:
+        return self._leer_vivo(
+            "SELECT TOP 100 a.FECHA, a.EMAIL, p.DESCRIPCION, "
+            "CAST(a.VALOR_ANTERIOR AS float) AS VALOR_ANTERIOR, "
+            "CAST(a.VALOR_NUEVO AS float) AS VALOR_NUEVO "
+            "FROM AUDITORIA_PARAMETROS a LEFT JOIN PARAMETROS_2027 p ON p.CODIGO = a.CODIGO "
+            "ORDER BY a.ID DESC")
+
     def valorizacion(self, anio: int, origenes: list[str]) -> pd.DataFrame:
         """Montos de PLANILLA por departamento (ORIGEN_2), planilla, partida,
         centro de costo y mes. 2026 casi no cambia (caché de 10 min); 2027
@@ -661,10 +703,14 @@ class RepositorioSQL:
         sql = ("SELECT p.ORIGEN_2 AS DEPTO, p.ORIGEN, p.PARTIDA, pp.Descripcion AS DESCRIPCION, "
                "p.CENTRO_COSTO, p.MES, CAST(SUM(p.IMPORTE) AS float) AS IMPORTE "
                "FROM PLANILLA p LEFT JOIN PartidaPresupuestal pp ON pp.Codigo = p.PARTIDA "
-               f"WHERE p.AÑO = %s AND p.ORIGEN_2 IN ({marcas}) "
+               # AÑO es varchar: compararlo con texto deja usar IX_PLANILLA_ANIO
+               # (con un número SQL convierte toda la columna y la recorre entera)
+               f"WHERE p.AÑO = CAST(%s AS varchar(20)) AND p.ORIGEN_2 IN ({marcas}) "
                "GROUP BY p.ORIGEN_2, p.ORIGEN, p.PARTIDA, pp.Descripcion, p.CENTRO_COSTO, p.MES")
-        leer = self._leer if anio < 2027 else self._leer_vivo
-        return leer(sql, (anio, *origenes))
+        if anio < 2027:
+            return _leer_historico(self._server, self._port, self._database, self._user,
+                                   self._password, sql, (str(anio), *origenes))
+        return self._leer_vivo(sql, (str(anio), *origenes))
 
     def permisos_usuario(self, email: str) -> pd.DataFrame:
         """Roles activos del correo (ver sql/crear_usuarios_planillas.sql)."""
@@ -707,6 +753,9 @@ class RepositorioSQL:
         with self._conn() as conn:
             cur = conn.cursor()
             try:
+                # Los índices únicos filtrados de DATOS_ENTRADA (sql/crear_indices_2027.sql)
+                # exigen ARITHABORT ON a quien escribe; pytds lo deja en OFF.
+                cur.execute("SET ARITHABORT ON;")
                 # Un solo guardado a la vez por planilla y departamento: dos
                 # guardados cruzados (doble clic, dos pestañas) hacían DELETE,
                 # DELETE, INSERT, INSERT y dejaban las filas duplicadas.

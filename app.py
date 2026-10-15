@@ -15,8 +15,10 @@ se quiera; el departamento valoriza todo junto desde "Resumen y valorización".
 import streamlit as st
 
 from src.auth import barra_usuario, exigir_login
+from src.borrador import (aviso_al_salir, autoguardar, firma, marcar_guardado,
+                          mostrar_indicador, indicador, pendiente, toca_autoguardar)
 from src.carga_academica import consulta_carga_academica, registro_carga_academica
-from src.config import cfg_de
+from src.config import MESES, cfg_de, dims_fila
 from src.flujo import (aviso_departamento, leer_flujo, marcar, ahora, panel_flujo,
                        vista_admin, vista_resumen)
 from src.reporte import vista_reporte
@@ -59,10 +61,15 @@ def main():
                      lambda: vista_reporte(repo, fl, usuario, repo.departamentos())))
     if usuario.presupuesto:
         pestañas.append(("Presupuesto · administración",
-                         lambda: vista_admin(repo, fl, repo.departamentos())))
-    for tab, (_, vista) in zip(st.tabs([t for t, _ in pestañas]), pestañas):
-        with tab:
-            vista()
+                         lambda: vista_admin(repo, fl, repo.departamentos(), usuario)))
+    # Solo se ejecuta la pestaña abierta: las demás no consultan la base ni
+    # dibujan nada hasta que se abren (lo editado y no guardado sigue en la sesión)
+    tabs = st.tabs([t for t, _ in pestañas], on_change="rerun", key="nav_principal")
+    for tab, (_, vista) in zip(tabs, pestañas):
+        if tab.open:
+            with tab:
+                vista()
+    aviso_al_salir()
 
 
 def vista_departamentos(repo, fl, usuario):
@@ -89,8 +96,11 @@ def vista_departamentos(repo, fl, usuario):
         st.caption(cfg_de(TC_HOJAS[0])["ayuda"])
         roster = repo.roster(origen)
         estructura = repo.estructura_tc(origen)
-        pestañas = st.tabs(["I semestre (Ene-Jun)", "II semestre (Jul-Dic)"])
+        pestañas = st.tabs(["I semestre (Ene-Jun)", "II semestre (Jul-Dic)"],
+                           on_change="rerun", key=f"tabs_tc_{origen}")
         for hoja, tab in zip(TC_HOJAS, pestañas):
+            if not tab.open:
+                continue
             with tab:
                 _renderizar_ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen,
                                      entrada[entrada["HOJA_ORIGEN"] == hoja], solo_lectura)
@@ -121,6 +131,21 @@ def _renderizar_ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guard
     # La estructura TC puede traer CECOs de otros departamentos (docentes
     # transversales); son válidos porque vienen del catálogo, no del usuario.
     ccos_validos = set(ccos["CODIGO_CECO"]) | set(estructura["CODIGO_CECO"])
+    clave, f_actual = f"{hoja}|{origen}", firma(editado, dims_fila(cfg), MESES)
+    hay_cambios = pendiente(clave, f_actual)
+
+    def _errores():
+        errores = validar(hoja, editado, ccos_validos, {}, estricto=False)
+        invalidos = st.session_state.get(f"_invalidos_{hoja}") or []
+        if invalidos:
+            errores.insert(0, "Hay horas mal escritas (usa hh:mm, por ejemplo 03:30) en: "
+                           + ", ".join(invalidos) + ".")
+        return errores
+
+    if hay_cambios and not solo_lectura and toca_autoguardar(clave):
+        autoguardar(clave, f_actual, _errores(),
+                    lambda: guardar_borrador(repo, hoja, origen, editado))
+        hay_cambios = pendiente(clave, f_actual)
     st.markdown('<div style="height:60px"></div>', unsafe_allow_html=True)
     with st.container(key=f"barra_guardar_{hoja}"):
         c_info, c_btn = st.columns([3, 1])
@@ -130,24 +155,24 @@ def _renderizar_ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guard
         c_info.markdown(
             f'<div class="bottom-info">{cfg["etiqueta"]} · '
             f'{con_horas} de {editado["DNI"].nunique()} docente(s) con horas'
-            f'{" · último guardado " + fmt(guardado_en) if guardado_en else ""}</div>',
+            f'{" · último guardado " + fmt(guardado_en) if guardado_en else ""}'
+            f'<br><span style="color:{"#B54708" if hay_cambios else "#067647"}">'
+            f'{indicador(clave, hay_cambios, solo_lectura)}</span></div>',
             unsafe_allow_html=True)
         clic_guardar = c_btn.button("Guardar", type="primary", width="stretch",
                                     key=f"btn_guardar_{hoja}", disabled=solo_lectura)
     if clic_guardar:
-        errores = validar(hoja, editado, ccos_validos, {}, estricto=False)
-        invalidos = st.session_state.get(f"_invalidos_{hoja}") or []
-        if invalidos:
-            errores.insert(0, "Hay horas mal escritas (usa hh:mm, por ejemplo 03:30) en: "
-                           + ", ".join(invalidos) + ".")
+        errores = _errores()
         if errores:
             _dialogo_errores(errores)
         else:
             with st.spinner("Guardando…"):
                 ok, mensaje = guardar_borrador(repo, hoja, origen, editado)
-            st.toast(mensaje, icon="✅" if ok else "🛑")
-            if not ok:
-                st.error(mensaje, icon="🛑")
+            if ok:
+                marcar_guardado(clave, f_actual)
+                st.session_state[f"_resultado_{hoja}"] = (True, mensaje)
+                st.rerun()
+            st.error(mensaje, icon="🛑")
 
 
 @st.dialog("Revisa antes de guardar", width="large")
@@ -169,16 +194,29 @@ def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guard
     lineas, registros = conteo(editado)
     hero(hoja, total, horas, lineas, registros)
 
+    clave = f"{hoja}|{origen}"
+    f_actual = firma(editado, [c for c in editado.columns if c not in MESES], MESES)
+    hay_cambios = pendiente(clave, f_actual)
+    errores_de = lambda: validar(hoja, editado, set(ccos["CODIGO_CECO"]), tarifas,
+                                 estricto=False)
+    if hay_cambios and not solo_lectura and toca_autoguardar(clave):
+        autoguardar(clave, f_actual, errores_de(),
+                    lambda: guardar_borrador(repo, hoja, origen, editado))
+        hay_cambios = pendiente(clave, f_actual)
+
     st.divider()
+    mostrar_indicador(clave, hay_cambios, solo_lectura)
     if st.button("Guardar", type="primary", width="stretch",
                  key=f"btn_guardar_{hoja}", disabled=solo_lectura):
-        errores = validar(hoja, editado, set(ccos["CODIGO_CECO"]), tarifas, estricto=False)
+        errores = errores_de()
         if errores:
             _dialogo_errores(errores)
         else:
             with st.spinner("Guardando…"):
-                st.session_state[f"_resultado_{hoja}"] = guardar_borrador(
-                    repo, hoja, origen, editado)
+                resultado = guardar_borrador(repo, hoja, origen, editado)
+            if resultado[0]:
+                marcar_guardado(clave, f_actual)
+            st.session_state[f"_resultado_{hoja}"] = resultado
             st.rerun()
 
 

@@ -8,6 +8,8 @@
       (Horas Adicionales sin TARIFA en la fila, Ayudantías y Carga Académica).
     - Investigación: el DELETE final usaba AÑO='2026' fijo; ahora usa @Anio.
     - Carga Académica: semestres '2027-1' / '2027-2'.
+    - Cargas sociales y factor de grados desde PARAMETROS_2027
+      (sql/crear_parametros_2027.sql): ejecutar ese script antes que este.
   Los sp_*_2026 no se modifican. CREATE OR ALTER: se puede ejecutar de nuevo.
   Generado desde las definiciones en Azure del 2026-10-14.
 */
@@ -17,6 +19,23 @@ CREATE OR ALTER PROCEDURE [dbo].[sp_Valorizar_HorasAdicionales_2027]
 AS
 BEGIN
     SET NOCOUNT ON;
+
+    -- Tasas desde PARAMETROS_2027 (sql/crear_parametros_2027.sql); antes fijas
+    DECLARE @TasaGrat DECIMAL(9,6), @TasaEssalud DECIMAL(9,6), @TasaCTS DECIMAL(9,6),
+            @TasaVac DECIMAL(9,6), @TasaVidaLey DECIMAL(9,6), @TasaAsigFam DECIMAL(9,6),
+            @FactorGrados DECIMAL(9,6);
+    SELECT @TasaGrat     = MAX(CASE WHEN CODIGO = 'GRATIFICACION' THEN VALOR END),
+           @TasaEssalud  = MAX(CASE WHEN CODIGO = 'ESSALUD'       THEN VALOR END),
+           @TasaCTS      = MAX(CASE WHEN CODIGO = 'CTS'           THEN VALOR END),
+           @TasaVac      = MAX(CASE WHEN CODIGO = 'VACACIONES'    THEN VALOR END),
+           @TasaVidaLey  = MAX(CASE WHEN CODIGO = 'VIDA_LEY'      THEN VALOR END),
+           @TasaAsigFam  = MAX(CASE WHEN CODIGO = 'ASIG_FAMILIAR' THEN VALOR END),
+           @FactorGrados = MAX(CASE WHEN CODIGO = 'FACTOR_GRADOS' THEN VALOR END)
+    FROM dbo.PARAMETROS_2027;
+    IF @TasaGrat IS NULL OR @TasaEssalud IS NULL OR @TasaCTS IS NULL OR @TasaVac IS NULL
+       OR @TasaVidaLey IS NULL OR @TasaAsigFam IS NULL OR @FactorGrados IS NULL
+        THROW 50011, 'Faltan parámetros en PARAMETROS_2027 (sql/crear_parametros_2027.sql).', 1;
+
 
     ------------------------------------------------------------
     -- Declaraciones iniciales
@@ -90,7 +109,7 @@ BEGIN
         p.CENTRO_COSTO,
         '94.1.1.1.036',
         p.MES,
-        ROUND(p.IMPORTE * 0.1817, 2),
+        ROUND(p.IMPORTE * @TasaGrat, 2),
         p.ORIGEN,
         p.ORIGEN_2,
         p.AÑO
@@ -109,7 +128,7 @@ BEGIN
         p.CENTRO_COSTO,
         '94.1.1.1.035',
         p.MES,
-        ROUND(p.IMPORTE * 0.09, 2),
+        ROUND(p.IMPORTE * @TasaEssalud, 2),
         p.ORIGEN,
         p.ORIGEN_2,
         p.AÑO
@@ -148,6 +167,23 @@ CREATE OR ALTER PROCEDURE [dbo].[sp_Valorizar_Postgrado_2027]
 AS
 BEGIN
     SET NOCOUNT ON;
+
+    -- Tasas desde PARAMETROS_2027 (sql/crear_parametros_2027.sql); antes fijas
+    DECLARE @TasaGrat DECIMAL(9,6), @TasaEssalud DECIMAL(9,6), @TasaCTS DECIMAL(9,6),
+            @TasaVac DECIMAL(9,6), @TasaVidaLey DECIMAL(9,6), @TasaAsigFam DECIMAL(9,6),
+            @FactorGrados DECIMAL(9,6);
+    SELECT @TasaGrat     = MAX(CASE WHEN CODIGO = 'GRATIFICACION' THEN VALOR END),
+           @TasaEssalud  = MAX(CASE WHEN CODIGO = 'ESSALUD'       THEN VALOR END),
+           @TasaCTS      = MAX(CASE WHEN CODIGO = 'CTS'           THEN VALOR END),
+           @TasaVac      = MAX(CASE WHEN CODIGO = 'VACACIONES'    THEN VALOR END),
+           @TasaVidaLey  = MAX(CASE WHEN CODIGO = 'VIDA_LEY'      THEN VALOR END),
+           @TasaAsigFam  = MAX(CASE WHEN CODIGO = 'ASIG_FAMILIAR' THEN VALOR END),
+           @FactorGrados = MAX(CASE WHEN CODIGO = 'FACTOR_GRADOS' THEN VALOR END)
+    FROM dbo.PARAMETROS_2027;
+    IF @TasaGrat IS NULL OR @TasaEssalud IS NULL OR @TasaCTS IS NULL OR @TasaVac IS NULL
+       OR @TasaVidaLey IS NULL OR @TasaAsigFam IS NULL OR @FactorGrados IS NULL
+        THROW 50011, 'Faltan parámetros en PARAMETROS_2027 (sql/crear_parametros_2027.sql).', 1;
+
 
     DECLARE 
         @Anio INT = 2027,
@@ -212,31 +248,31 @@ BEGIN
     ------------------------------------------------------------
     -- Gratificación
     INSERT INTO PLANILLA (CENTRO_COSTO, PARTIDA, MES, IMPORTE, ORIGEN, ORIGEN_2, AÑO)
-    SELECT p.CENTRO_COSTO,'94.1.1.1.006',p.MES,ROUND(p.IMPORTE*0.1817,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
+    SELECT p.CENTRO_COSTO,'94.1.1.1.006',p.MES,ROUND(p.IMPORTE*@TasaGrat,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
     FROM PLANILLA p 
     WHERE p.ORIGEN=@Origen AND p.ORIGEN_2=@OrigenEntrada AND p.AÑO=@Anio AND p.PARTIDA='94.1.1.1.002';
 
     -- Essalud
     INSERT INTO PLANILLA (CENTRO_COSTO, PARTIDA, MES, IMPORTE, ORIGEN, ORIGEN_2, AÑO)
-    SELECT p.CENTRO_COSTO,'94.1.1.1.011',p.MES,ROUND(p.IMPORTE*0.09,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
+    SELECT p.CENTRO_COSTO,'94.1.1.1.011',p.MES,ROUND(p.IMPORTE*@TasaEssalud,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
     FROM PLANILLA p 
     WHERE p.ORIGEN=@Origen AND p.ORIGEN_2=@OrigenEntrada AND p.AÑO=@Anio AND p.PARTIDA='94.1.1.1.002';
 
     -- CTS
     INSERT INTO PLANILLA (CENTRO_COSTO, PARTIDA, MES, IMPORTE, ORIGEN, ORIGEN_2, AÑO)
-    SELECT p.CENTRO_COSTO,'94.1.1.1.024',p.MES,ROUND(p.IMPORTE*0.0972,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
+    SELECT p.CENTRO_COSTO,'94.1.1.1.024',p.MES,ROUND(p.IMPORTE*@TasaCTS,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
     FROM PLANILLA p 
     WHERE p.ORIGEN=@Origen AND p.ORIGEN_2=@OrigenEntrada AND p.AÑO=@Anio AND p.PARTIDA='94.1.1.1.002';
 
     -- Vacaciones
     INSERT INTO PLANILLA (CENTRO_COSTO, PARTIDA, MES, IMPORTE, ORIGEN, ORIGEN_2, AÑO)
-    SELECT p.CENTRO_COSTO,'94.1.1.1.009',p.MES,ROUND(p.IMPORTE*0.1599,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
+    SELECT p.CENTRO_COSTO,'94.1.1.1.009',p.MES,ROUND(p.IMPORTE*@TasaVac,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
     FROM PLANILLA p 
     WHERE p.ORIGEN=@Origen AND p.ORIGEN_2=@OrigenEntrada AND p.AÑO=@Anio AND p.PARTIDA='94.1.1.1.002';
 
     -- Vida Ley
     INSERT INTO PLANILLA (CENTRO_COSTO, PARTIDA, MES, IMPORTE, ORIGEN, ORIGEN_2, AÑO)
-    SELECT p.CENTRO_COSTO,'94.1.1.1.015',p.MES,ROUND(p.IMPORTE*0.0038,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
+    SELECT p.CENTRO_COSTO,'94.1.1.1.015',p.MES,ROUND(p.IMPORTE*@TasaVidaLey,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
     FROM PLANILLA p 
     WHERE p.ORIGEN=@Origen AND p.ORIGEN_2=@OrigenEntrada AND p.AÑO=@Anio AND p.PARTIDA='94.1.1.1.002';
 
@@ -245,13 +281,13 @@ BEGIN
     ------------------------------------------------------------
     -- Gratificación parcial
     INSERT INTO PLANILLA (CENTRO_COSTO, PARTIDA, MES, IMPORTE, ORIGEN, ORIGEN_2, AÑO)
-    SELECT p.CENTRO_COSTO,'94.1.1.1.036',p.MES,ROUND(p.IMPORTE*0.1817,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
+    SELECT p.CENTRO_COSTO,'94.1.1.1.036',p.MES,ROUND(p.IMPORTE*@TasaGrat,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
     FROM PLANILLA p 
     WHERE p.ORIGEN=@Origen AND p.ORIGEN_2=@OrigenEntrada AND p.AÑO=@Anio AND p.PARTIDA='94.1.1.1.033';
 
     -- Essalud parcial
     INSERT INTO PLANILLA (CENTRO_COSTO, PARTIDA, MES, IMPORTE, ORIGEN, ORIGEN_2, AÑO)
-    SELECT p.CENTRO_COSTO,'94.1.1.1.035',p.MES,ROUND(p.IMPORTE*0.09,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
+    SELECT p.CENTRO_COSTO,'94.1.1.1.035',p.MES,ROUND(p.IMPORTE*@TasaEssalud,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
     FROM PLANILLA p 
     WHERE p.ORIGEN=@Origen AND p.ORIGEN_2=@OrigenEntrada AND p.AÑO=@Anio AND p.PARTIDA='94.1.1.1.033';
 
@@ -279,6 +315,23 @@ CREATE OR ALTER PROCEDURE [dbo].[sp_Valorizar_Investigacion_2027]
 AS
 BEGIN
     SET NOCOUNT ON;
+
+    -- Tasas desde PARAMETROS_2027 (sql/crear_parametros_2027.sql); antes fijas
+    DECLARE @TasaGrat DECIMAL(9,6), @TasaEssalud DECIMAL(9,6), @TasaCTS DECIMAL(9,6),
+            @TasaVac DECIMAL(9,6), @TasaVidaLey DECIMAL(9,6), @TasaAsigFam DECIMAL(9,6),
+            @FactorGrados DECIMAL(9,6);
+    SELECT @TasaGrat     = MAX(CASE WHEN CODIGO = 'GRATIFICACION' THEN VALOR END),
+           @TasaEssalud  = MAX(CASE WHEN CODIGO = 'ESSALUD'       THEN VALOR END),
+           @TasaCTS      = MAX(CASE WHEN CODIGO = 'CTS'           THEN VALOR END),
+           @TasaVac      = MAX(CASE WHEN CODIGO = 'VACACIONES'    THEN VALOR END),
+           @TasaVidaLey  = MAX(CASE WHEN CODIGO = 'VIDA_LEY'      THEN VALOR END),
+           @TasaAsigFam  = MAX(CASE WHEN CODIGO = 'ASIG_FAMILIAR' THEN VALOR END),
+           @FactorGrados = MAX(CASE WHEN CODIGO = 'FACTOR_GRADOS' THEN VALOR END)
+    FROM dbo.PARAMETROS_2027;
+    IF @TasaGrat IS NULL OR @TasaEssalud IS NULL OR @TasaCTS IS NULL OR @TasaVac IS NULL
+       OR @TasaVidaLey IS NULL OR @TasaAsigFam IS NULL OR @FactorGrados IS NULL
+        THROW 50011, 'Faltan parámetros en PARAMETROS_2027 (sql/crear_parametros_2027.sql).', 1;
+
 
     DECLARE @Anio INT = 2027;
     DECLARE @Presupuesto NVARCHAR(20) = N'PPTO2027';
@@ -349,25 +402,25 @@ BEGIN
     -- 4️⃣ CARGAS SOCIALES: TIEMPO COMPLETO
     ------------------------------------------------------------
     INSERT INTO PLANILLA (CENTRO_COSTO, PARTIDA, MES, IMPORTE, ORIGEN, ORIGEN_2, AÑO)
-    SELECT p.CENTRO_COSTO, '94.1.1.1.006', p.MES, ROUND(p.IMPORTE * 0.1817, 2), p.ORIGEN, p.ORIGEN_2, p.AÑO
+    SELECT p.CENTRO_COSTO, '94.1.1.1.006', p.MES, ROUND(p.IMPORTE * @TasaGrat, 2), p.ORIGEN, p.ORIGEN_2, p.AÑO
     FROM PLANILLA p
     WHERE p.AÑO = @Anio AND p.ORIGEN = @Origen AND p.ORIGEN_2 = @OrigenEntrada
       AND p.PARTIDA = '94.1.1.1.002';
 
     INSERT INTO PLANILLA (CENTRO_COSTO, PARTIDA, MES, IMPORTE, ORIGEN, ORIGEN_2, AÑO)
-    SELECT p.CENTRO_COSTO, '94.1.1.1.011', p.MES, ROUND(p.IMPORTE * 0.09, 2), p.ORIGEN, p.ORIGEN_2, p.AÑO
+    SELECT p.CENTRO_COSTO, '94.1.1.1.011', p.MES, ROUND(p.IMPORTE * @TasaEssalud, 2), p.ORIGEN, p.ORIGEN_2, p.AÑO
     FROM PLANILLA p
     WHERE p.AÑO = @Anio AND p.ORIGEN = @Origen AND p.ORIGEN_2 = @OrigenEntrada
       AND p.PARTIDA = '94.1.1.1.002';
 
     INSERT INTO PLANILLA (CENTRO_COSTO, PARTIDA, MES, IMPORTE, ORIGEN, ORIGEN_2, AÑO)
-    SELECT p.CENTRO_COSTO, '94.1.1.1.024', p.MES, ROUND(p.IMPORTE * 0.0972, 2), p.ORIGEN, p.ORIGEN_2, p.AÑO
+    SELECT p.CENTRO_COSTO, '94.1.1.1.024', p.MES, ROUND(p.IMPORTE * @TasaCTS, 2), p.ORIGEN, p.ORIGEN_2, p.AÑO
     FROM PLANILLA p
     WHERE p.AÑO = @Anio AND p.ORIGEN = @Origen AND p.ORIGEN_2 = @OrigenEntrada
       AND p.PARTIDA = '94.1.1.1.002';
 
     INSERT INTO PLANILLA (CENTRO_COSTO, PARTIDA, MES, IMPORTE, ORIGEN, ORIGEN_2, AÑO)
-    SELECT p.CENTRO_COSTO, '94.1.1.1.009', p.MES, ROUND(p.IMPORTE * 0.1599, 2), p.ORIGEN, p.ORIGEN_2, p.AÑO
+    SELECT p.CENTRO_COSTO, '94.1.1.1.009', p.MES, ROUND(p.IMPORTE * @TasaVac, 2), p.ORIGEN, p.ORIGEN_2, p.AÑO
     FROM PLANILLA p
     WHERE p.AÑO = @Anio AND p.ORIGEN = @Origen AND p.ORIGEN_2 = @OrigenEntrada
       AND p.PARTIDA = '94.1.1.1.002';
@@ -376,13 +429,13 @@ BEGIN
     -- 5️⃣ CARGAS SOCIALES: TIEMPO PARCIAL
     ------------------------------------------------------------
     INSERT INTO PLANILLA (CENTRO_COSTO, PARTIDA, MES, IMPORTE, ORIGEN, ORIGEN_2, AÑO)
-    SELECT p.CENTRO_COSTO, '94.1.1.1.036', p.MES, ROUND(p.IMPORTE * 0.1817, 2), p.ORIGEN, p.ORIGEN_2, p.AÑO
+    SELECT p.CENTRO_COSTO, '94.1.1.1.036', p.MES, ROUND(p.IMPORTE * @TasaGrat, 2), p.ORIGEN, p.ORIGEN_2, p.AÑO
     FROM PLANILLA p
     WHERE p.AÑO = @Anio AND p.ORIGEN = @Origen AND p.ORIGEN_2 = @OrigenEntrada
       AND p.PARTIDA = '94.1.1.1.033';
 
     INSERT INTO PLANILLA (CENTRO_COSTO, PARTIDA, MES, IMPORTE, ORIGEN, ORIGEN_2, AÑO)
-    SELECT p.CENTRO_COSTO, '94.1.1.1.035', p.MES, ROUND(p.IMPORTE * 0.09, 2), p.ORIGEN, p.ORIGEN_2, p.AÑO
+    SELECT p.CENTRO_COSTO, '94.1.1.1.035', p.MES, ROUND(p.IMPORTE * @TasaEssalud, 2), p.ORIGEN, p.ORIGEN_2, p.AÑO
     FROM PLANILLA p
     WHERE p.AÑO = @Anio AND p.ORIGEN = @Origen AND p.ORIGEN_2 = @OrigenEntrada
       AND p.PARTIDA = '94.1.1.1.033';
@@ -497,6 +550,23 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
+    -- Tasas desde PARAMETROS_2027 (sql/crear_parametros_2027.sql); antes fijas
+    DECLARE @TasaGrat DECIMAL(9,6), @TasaEssalud DECIMAL(9,6), @TasaCTS DECIMAL(9,6),
+            @TasaVac DECIMAL(9,6), @TasaVidaLey DECIMAL(9,6), @TasaAsigFam DECIMAL(9,6),
+            @FactorGrados DECIMAL(9,6);
+    SELECT @TasaGrat     = MAX(CASE WHEN CODIGO = 'GRATIFICACION' THEN VALOR END),
+           @TasaEssalud  = MAX(CASE WHEN CODIGO = 'ESSALUD'       THEN VALOR END),
+           @TasaCTS      = MAX(CASE WHEN CODIGO = 'CTS'           THEN VALOR END),
+           @TasaVac      = MAX(CASE WHEN CODIGO = 'VACACIONES'    THEN VALOR END),
+           @TasaVidaLey  = MAX(CASE WHEN CODIGO = 'VIDA_LEY'      THEN VALOR END),
+           @TasaAsigFam  = MAX(CASE WHEN CODIGO = 'ASIG_FAMILIAR' THEN VALOR END),
+           @FactorGrados = MAX(CASE WHEN CODIGO = 'FACTOR_GRADOS' THEN VALOR END)
+    FROM dbo.PARAMETROS_2027;
+    IF @TasaGrat IS NULL OR @TasaEssalud IS NULL OR @TasaCTS IS NULL OR @TasaVac IS NULL
+       OR @TasaVidaLey IS NULL OR @TasaAsigFam IS NULL OR @FactorGrados IS NULL
+        THROW 50011, 'Faltan parámetros en PARAMETROS_2027 (sql/crear_parametros_2027.sql).', 1;
+
+
     ------------------------------------------------------------
     -- VARIABLES
     ------------------------------------------------------------
@@ -602,7 +672,7 @@ BEGIN
         -- 3️⃣ CARGAS SOCIALES
         --------------------------------------------------------
         INSERT INTO PLANILLA (CENTRO_COSTO,PARTIDA,MES,IMPORTE,ORIGEN,ORIGEN_2,AÑO)
-        SELECT p.CENTRO_COSTO,'94.1.1.1.024',p.MES,ROUND(p.IMPORTE*0.0972,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
+        SELECT p.CENTRO_COSTO,'94.1.1.1.024',p.MES,ROUND(p.IMPORTE*@TasaCTS,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
         FROM PLANILLA p 
         WHERE p.AÑO=@Anio 
           AND p.PARTIDA='94.1.1.1.002' 
@@ -611,7 +681,7 @@ BEGIN
         SET @RegCTS=@@ROWCOUNT;
 
         INSERT INTO PLANILLA (CENTRO_COSTO,PARTIDA,MES,IMPORTE,ORIGEN,ORIGEN_2,AÑO)
-        SELECT p.CENTRO_COSTO,'94.1.1.1.009',p.MES,ROUND(p.IMPORTE*0.1599,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
+        SELECT p.CENTRO_COSTO,'94.1.1.1.009',p.MES,ROUND(p.IMPORTE*@TasaVac,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
         FROM PLANILLA p 
         WHERE p.AÑO=@Anio 
           AND p.PARTIDA='94.1.1.1.002' 
@@ -620,7 +690,7 @@ BEGIN
         SET @RegVac=@@ROWCOUNT;
 
         INSERT INTO PLANILLA (CENTRO_COSTO,PARTIDA,MES,IMPORTE,ORIGEN,ORIGEN_2,AÑO)
-        SELECT p.CENTRO_COSTO,'94.1.1.1.006',p.MES,ROUND(p.IMPORTE*0.1817,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
+        SELECT p.CENTRO_COSTO,'94.1.1.1.006',p.MES,ROUND(p.IMPORTE*@TasaGrat,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
         FROM PLANILLA p 
         WHERE p.AÑO=@Anio 
           AND p.PARTIDA='94.1.1.1.002' 
@@ -629,7 +699,7 @@ BEGIN
         SET @RegGrat=@@ROWCOUNT;
 
         INSERT INTO PLANILLA (CENTRO_COSTO,PARTIDA,MES,IMPORTE,ORIGEN,ORIGEN_2,AÑO)
-        SELECT p.CENTRO_COSTO,'94.1.1.1.011',p.MES,ROUND(p.IMPORTE*0.09,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
+        SELECT p.CENTRO_COSTO,'94.1.1.1.011',p.MES,ROUND(p.IMPORTE*@TasaEssalud,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
         FROM PLANILLA p 
         WHERE p.AÑO=@Anio 
           AND p.PARTIDA='94.1.1.1.002' 
@@ -638,7 +708,7 @@ BEGIN
         SET @RegEss=@@ROWCOUNT;
 
         INSERT INTO PLANILLA (CENTRO_COSTO,PARTIDA,MES,IMPORTE,ORIGEN,ORIGEN_2,AÑO)
-        SELECT p.CENTRO_COSTO,'94.1.1.1.015',p.MES,ROUND(p.IMPORTE*0.0038,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
+        SELECT p.CENTRO_COSTO,'94.1.1.1.015',p.MES,ROUND(p.IMPORTE*@TasaVidaLey,2),p.ORIGEN,p.ORIGEN_2,p.AÑO
         FROM PLANILLA p 
         WHERE p.AÑO=@Anio 
           AND p.PARTIDA='94.1.1.1.002' 
@@ -727,6 +797,23 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
+    -- Tasas desde PARAMETROS_2027 (sql/crear_parametros_2027.sql); antes fijas
+    DECLARE @TasaGrat DECIMAL(9,6), @TasaEssalud DECIMAL(9,6), @TasaCTS DECIMAL(9,6),
+            @TasaVac DECIMAL(9,6), @TasaVidaLey DECIMAL(9,6), @TasaAsigFam DECIMAL(9,6),
+            @FactorGrados DECIMAL(9,6);
+    SELECT @TasaGrat     = MAX(CASE WHEN CODIGO = 'GRATIFICACION' THEN VALOR END),
+           @TasaEssalud  = MAX(CASE WHEN CODIGO = 'ESSALUD'       THEN VALOR END),
+           @TasaCTS      = MAX(CASE WHEN CODIGO = 'CTS'           THEN VALOR END),
+           @TasaVac      = MAX(CASE WHEN CODIGO = 'VACACIONES'    THEN VALOR END),
+           @TasaVidaLey  = MAX(CASE WHEN CODIGO = 'VIDA_LEY'      THEN VALOR END),
+           @TasaAsigFam  = MAX(CASE WHEN CODIGO = 'ASIG_FAMILIAR' THEN VALOR END),
+           @FactorGrados = MAX(CASE WHEN CODIGO = 'FACTOR_GRADOS' THEN VALOR END)
+    FROM dbo.PARAMETROS_2027;
+    IF @TasaGrat IS NULL OR @TasaEssalud IS NULL OR @TasaCTS IS NULL OR @TasaVac IS NULL
+       OR @TasaVidaLey IS NULL OR @TasaAsigFam IS NULL OR @FactorGrados IS NULL
+        THROW 50011, 'Faltan parámetros en PARAMETROS_2027 (sql/crear_parametros_2027.sql).', 1;
+
+
     DECLARE @Presupuesto NVARCHAR(20) = N'PPTO2027';
     -- Tarifas por hora desde tarifas_2027 (antes fijas: 152 / 100 / 105)
     DECLARE @TarifaTitular   DECIMAL(18,4) = (SELECT MAX(TARIFA) FROM tarifas_2027 WHERE HOJA_ORIGEN = 'Horas Adicionales' AND TIPO = 'Titular');
@@ -786,7 +873,7 @@ BEGIN
                                      THEN ISNULL(de.IMPORTE,0)*@TarifaTitular - ISNULL(hd.HORAS_TC,0)*@TarifaTitular ELSE 0 END
                             ELSE ISNULL(de.IMPORTE,0)*@TarifaTitular
                         END
-                        * 1.0851  -- 🔹 8% Maestrías + 0.51% Doctorado
+                        * @FactorGrados  -- 🔹 8% Maestrías + 0.51% Doctorado
                     )
                 WHEN LTRIM(RTRIM(de.CONCEPTO)) = '# HORAS ASITENTES' THEN ISNULL(de.IMPORTE,0)*@TarifaAsistente
                 WHEN LTRIM(RTRIM(de.CONCEPTO)) = '# HORAS JEFES DE PRÁCTICA' THEN ISNULL(de.IMPORTE,0)*@TarifaJP
@@ -892,7 +979,7 @@ BEGIN
         p.CENTRO_COSTO, 
         '94.1.1.1.036',
         NULL, p.MES,
-        ROUND(p.IMPORTE * 0.09, 2),
+        ROUND(p.IMPORTE * @TasaEssalud, 2),
         p.ORIGEN, NULL, p.CONCEPTO, NULL, p.ORIGEN_2, NULL, p.AÑO
     FROM PLANILLA p 
     WHERE p.AÑO=2027 AND p.ORIGEN='Carga Academica' AND p.PARTIDA='94.1.1.1.033';
@@ -904,7 +991,7 @@ BEGIN
         p.CENTRO_COSTO, 
         '94.1.1.1.035',
         NULL, p.MES,
-        ROUND(p.IMPORTE * 0.1817, 2),
+        ROUND(p.IMPORTE * @TasaGrat, 2),
         p.ORIGEN, NULL, p.CONCEPTO, NULL, p.ORIGEN_2, NULL, p.AÑO
     FROM PLANILLA p 
     WHERE p.AÑO=2027 AND p.ORIGEN='Carga Academica' AND p.PARTIDA='94.1.1.1.033';
@@ -916,7 +1003,7 @@ BEGIN
         p.CENTRO_COSTO, 
         '94.1.1.1.034',
         NULL, p.MES,
-        ROUND(p.IMPORTE * 0.0132, 2),
+        ROUND(p.IMPORTE * @TasaAsigFam, 2),
         p.ORIGEN, NULL, p.CONCEPTO, NULL, p.ORIGEN_2, NULL, p.AÑO
     FROM PLANILLA p 
     WHERE p.AÑO=2027 AND p.ORIGEN='Carga Academica' AND p.PARTIDA='94.1.1.1.033';

@@ -25,15 +25,18 @@ XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 def vista_desarrollo_humano(repo, usuario, deptos):
     t_imp, t_tar, t_aud = st.tabs(["Importar docentes y salarios", "Tarifas",
-                                   "Registro de cambios"])
-    with t_imp:
-        _importar(repo, usuario, deptos)
-    with t_tar:
-        _tarifas(repo, usuario)
-    with t_aud:
-        st.caption("Importaciones y cambios de tarifas. Las importaciones registran solo "
-                   "conteos, nunca datos de personas ni montos.")
-        st.dataframe(repo.auditoria_dh(), hide_index=True, width="stretch")
+                                   "Registro de cambios"], on_change="rerun", key="tabs_rrhh")
+    if t_imp.open:
+        with t_imp:
+            _importar(repo, usuario, deptos)
+    if t_tar.open:
+        with t_tar:
+            _tarifas(repo, usuario)
+    if t_aud.open:
+        with t_aud:
+            st.caption("Importaciones y cambios de tarifas. Las importaciones registran solo "
+                       "conteos, nunca datos de personas ni montos.")
+            st.dataframe(repo.auditoria_dh(), hide_index=True, width="stretch")
 
 
 def _mostrar_resultado(clave):

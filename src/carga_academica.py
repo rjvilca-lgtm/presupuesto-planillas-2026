@@ -14,6 +14,8 @@ En DATOS_ENTRADA cada fila de la grilla se guarda como una fila por concepto
 import pandas as pd
 import streamlit as st
 
+from .borrador import (autoguardar, firma, marcar_guardado, mostrar_indicador, pendiente,
+                       toca_autoguardar)
 from .config import CARGA_ACADEMICA, PRESUPUESTO
 from .flujo import DGA, ahora, marcar, panel_flujo
 
@@ -131,15 +133,35 @@ def registro_carga_academica(repo, fl):
     if st.session_state.get("_aviso_carga_academica"):
         st.info(st.session_state["_aviso_carga_academica"], icon="ℹ️")
 
+    widget_key = f"grilla_carga_academica_{st.session_state.get('_ver_carga_academica', 0)}"
+    if widget_key not in st.session_state and "_ultimo_carga_academica" in st.session_state:
+        # Al volver a la pestaña el editor se crea de nuevo: arranca de lo último editado
+        st.session_state["_base_carga_academica"] =             st.session_state["_ultimo_carga_academica"].reset_index(drop=True)
     editado = st.data_editor(
         st.session_state["_base_carga_academica"],
         num_rows="fixed" if bloqueado else "dynamic", disabled=bloqueado,
         hide_index=True, width="stretch", column_order=COLS_GRILLA,
-        column_config=_colcfg(ccos, True),
-        key=f"grilla_carga_academica_{st.session_state.get('_ver_carga_academica', 0)}")
+        column_config=_colcfg(ccos, True), key=widget_key)
+    st.session_state["_ultimo_carga_academica"] = editado
+
+    clave, f_actual = "carga_academica", firma(editado, ["MES", "CENTRO_COSTO"], CONCEPTOS)
+    hay_cambios = pendiente(clave, f_actual)
+
+    def _guardar():
+        try:
+            n = repo.guardar_borrador(CA["hoja"], DGA, _filas_destino(editado), COLS_DESTINO)
+            marcar(repo, DGA, FECHA_GUARDADO=ahora())
+            return True, f"{n} registro(s) de carga académica guardados."
+        except Exception as ex:
+            return False, f"No se guardó nada; se revirtió la operación. Detalle: {ex}"
+
+    if hay_cambios and not bloqueado and toca_autoguardar(clave):
+        autoguardar(clave, f_actual, _validar(editado, set(ccos["CODIGO_CECO"])), _guardar)
+        hay_cambios = pendiente(clave, f_actual)
 
     st.dataframe(_totales(editado), hide_index=True, width="stretch")
 
+    mostrar_indicador(clave, hay_cambios, bloqueado)
     c_guardar, c_valorizar = st.columns(2)
     if c_guardar.button("Guardar", type="primary", width="stretch", disabled=bloqueado,
                         key="btn_guardar_carga_academica"):
@@ -148,13 +170,9 @@ def registro_carga_academica(repo, fl):
             _dialogo_errores(errores)
         else:
             with st.spinner("Guardando…"):
-                try:
-                    filas = _filas_destino(editado)
-                    n = repo.guardar_borrador(CA["hoja"], DGA, filas, COLS_DESTINO)
-                    marcar(repo, DGA, FECHA_GUARDADO=ahora())
-                    res = (True, f"{n} registro(s) de carga académica guardados.")
-                except Exception as ex:
-                    res = (False, f"No se guardó nada; se revirtió la operación. Detalle: {ex}")
+                res = _guardar()
+            if res[0]:
+                marcar_guardado(clave, f_actual)
             st.session_state["_resultado_carga_academica"] = res
             st.rerun()
 
