@@ -367,7 +367,21 @@ class RepositorioSQL:
         df = self._leer("SELECT CODIGO, DESCRIPCION FROM Departamentos ORDER BY CODIGO")
         return list(df.itertuples(index=False, name=None))
 
+    def _cecos_2027(self) -> bool:
+        """¿Ya existen los centros de costo 2027 (sql/crear_cecos_2027.sql)?
+        Mientras no, la app sigue con el catálogo antiguo CENTROS_COSTOS."""
+        df = self._leer("SELECT OBJECT_ID('dbo.CECOS_DEPARTAMENTO_2027', 'U') AS ID")
+        return df["ID"].iloc[0] is not None
+
     def centros_costo(self, origen: str) -> pd.DataFrame:
+        if self._cecos_2027():
+            # Un código 2027 puede ser de varios departamentos (p. ej. proyectos
+            # de la facultad): cada uno lo ve en su lista
+            return self._leer(
+                "SELECT c.CENTRO_COSTO AS CODIGO_CECO, c.DESCRIPCION_CC AS DESCRIPCION_CECO "
+                "FROM CECOS_DEPARTAMENTO_2027 d "
+                "JOIN CENTROS_COSTOS_2027 c ON c.CENTRO_COSTO = d.CENTRO_COSTO "
+                "WHERE d.DEPARTAMENTO = %s ORDER BY c.CENTRO_COSTO", (origen,))
         # CENTROS_COSTOS.DEPARTAMENTO guarda la descripción del departamento,
         # no el código: se cruza vía Departamentos.
         return self._leer(
@@ -399,6 +413,7 @@ class RepositorioSQL:
         hojas TC deja de aparecer. Puede incluir CECOs de otros departamentos
         (docentes transversales)."""
         existe = self._leer("SELECT OBJECT_ID('dbo.CECO_CONCEPTO_TC', 'U') AS ID")
+        catalogo = "CENTROS_COSTOS_2027" if self._cecos_2027() else "CENTROS_COSTOS"
         if existe["ID"].iloc[0] is not None:
             return self._leer(
                 # CENTRO_COSTO '0' es intencional: horas de Gestión de Dirección
@@ -409,7 +424,7 @@ class RepositorioSQL:
                 "ELSE COALESCE(c.DESCRIPCION_CC, t.CENTRO_COSTO) END AS DESCRIPCION_CECO, "
                 "t.CONCEPTO "
                 "FROM CECO_CONCEPTO_TC t "
-                "LEFT JOIN CENTROS_COSTOS c ON c.CENTRO_COSTO = t.CENTRO_COSTO "
+                f"LEFT JOIN {catalogo} c ON c.CENTRO_COSTO = t.CENTRO_COSTO "
                 "WHERE t.DEPARTAMENTO = %s AND t.ACTIVO = 1 "
                 "ORDER BY t.CENTRO_COSTO, t.CONCEPTO", (origen,))
         return self._leer(
@@ -426,9 +441,10 @@ class RepositorioSQL:
             "ORDER BY CODIGO_CECO, CONCEPTO", (origen,))
 
     def todos_centros_costo(self) -> pd.DataFrame:
+        tabla = "CENTROS_COSTOS_2027" if self._cecos_2027() else "CENTROS_COSTOS"
         return self._leer(
             "SELECT DISTINCT CENTRO_COSTO AS CODIGO_CECO, DESCRIPCION_CC AS DESCRIPCION_CECO "
-            "FROM CENTROS_COSTOS ORDER BY CENTRO_COSTO")
+            f"FROM {tabla} ORDER BY CENTRO_COSTO")
 
     def carga_academica(self, actual: bool = True) -> pd.DataFrame:
         """Filas de la hoja Carga Academica en DATOS_ENTRADA. actual=True: las
@@ -437,6 +453,17 @@ class RepositorioSQL:
         filtro = "PRESUPUESTO = %s" if actual else "PRESUPUESTO IS NULL"
         params = (CARGA_ACADEMICA["hoja"], CARGA_ACADEMICA["origen"]) + (
             (PRESUPUESTO,) if actual else ())
+        if not actual and self._cecos_2027():
+            # 2026 con los centros de costo pasados a la codificación 2027
+            return self._leer(
+                "SELECT LTRIM(RTRIM(d.MES)) AS MES, "
+                "COALESCE(e.CODIGO_NUEVO, LTRIM(RTRIM(d.CENTRO_COSTO))) AS CENTRO_COSTO, "
+                "LTRIM(RTRIM(d.CONCEPTO)) AS CONCEPTO, CAST(SUM(d.IMPORTE) AS float) AS IMPORTE "
+                "FROM DATOS_ENTRADA d LEFT JOIN EQUIVALENCIA_CECOS e "
+                "ON e.CODIGO_ANTIGUO = LTRIM(RTRIM(d.CENTRO_COSTO)) "
+                "WHERE d.HOJA_ORIGEN = %s AND d.ORIGEN = %s AND d." + filtro + " "
+                "GROUP BY LTRIM(RTRIM(d.MES)), COALESCE(e.CODIGO_NUEVO, LTRIM(RTRIM(d.CENTRO_COSTO))), "
+                "LTRIM(RTRIM(d.CONCEPTO))", params)
         return self._leer(
             "SELECT LTRIM(RTRIM(MES)) AS MES, LTRIM(RTRIM(CENTRO_COSTO)) AS CENTRO_COSTO, "
             "LTRIM(RTRIM(CONCEPTO)) AS CONCEPTO, CAST(IMPORTE AS float) AS IMPORTE "

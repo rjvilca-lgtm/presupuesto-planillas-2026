@@ -8,6 +8,8 @@
       (Horas Adicionales sin TARIFA en la fila, Ayudantías y Carga Académica).
     - Investigación: el DELETE final usaba AÑO='2026' fijo; ahora usa @Anio.
     - Carga Académica: semestres '2027-1' / '2027-2'.
+    - Investigación: los centros de costo de proyectos externos que se excluyen
+      al final usan la codificación 2027 (sql/crear_cecos_2027.sql).
     - Carga Académica: el sp 2026 cruzaba las tasas de las partidas 036
       (gratificación, iba al 9 %) y 035 (EsSalud, iba al 18.17 %); aquí cada
       partida usa su tasa, como en los demás sp. El total no cambia.
@@ -467,16 +469,11 @@ BEGIN
     ------------------------------------------------------------
     DELETE FROM PLANILLA
     WHERE AÑO = @Anio
-      AND CENTRO_COSTO IN (
-            '03.01.04.04.07',
-            '03.01.05.04.13',
-            '03.01.06.04.17',
-            '03.01.07.04.06',
-            '03.01.08.04.08',
-            '03.01.13.04.15',
-            '03.01.09.04.02',
-            '03.01.11.04.08',
-            '03.01.02.04.03'
+      AND CENTRO_COSTO IN (   -- PROYECTOS EXTERNOS - CONCURSOS, codificación 2027
+            '01.01.02.05.02',   -- antes 03.01.02.04.03 (DCEE)
+            '01.01.04.05.06',   -- antes 03.01.04.04.07, 03.01.05.04.13, 03.01.06.04.17, 03.01.07.04.06
+            '01.01.05.05.07',   -- antes 03.01.08.04.08, 03.01.09.04.02
+            '01.01.07.05.04'    -- antes 03.01.11.04.08, 03.01.13.04.15
       )
       AND PARTIDA IN ('94.1.1.1.002','94.1.1.1.033');
 
