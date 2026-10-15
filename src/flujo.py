@@ -323,6 +323,9 @@ def _dialogo_cerrar(repo, origen):
 
 # ---------------------------------------------------------- administración
 
+ROLES = {"DEPARTAMENTO": "Departamento", "DGA": "DGA",
+         "DESARROLLO_HUMANO": "Desarrollo Humano", "PRESUPUESTO": "Presupuesto"}
+
 def vista_admin(repo, fl: Flujo, deptos: list[tuple]):
     """Solo para usuarios con rol PRESUPUESTO (app.py no muestra la pestaña
     a los demás)."""
@@ -388,8 +391,9 @@ def vista_admin(repo, fl: Flujo, deptos: list[tuple]):
 def _admin_usuarios(repo, deptos: list[tuple]):
     st.subheader("Usuarios")
     st.caption("Quién puede entrar con su cuenta @ucsp.edu.pe y qué puede hacer. "
-               "Presupuesto ve todo; DGA registra la carga académica; Departamento "
-               "registra las planillas de ese departamento.")
+               "Presupuesto ve todo (salvo los salarios); DGA registra la carga académica; "
+               "Desarrollo Humano mantiene docentes, horas, tarifas y salarios; "
+               "Departamento registra las planillas de ese departamento.")
     try:
         usuarios = repo.listar_usuarios()
     except Exception as ex:
@@ -398,8 +402,7 @@ def _admin_usuarios(repo, deptos: list[tuple]):
         return
     nombres = dict(deptos)
     vista = usuarios.assign(
-        ROL=usuarios["ROL"].map({"PRESUPUESTO": "Presupuesto", "DGA": "DGA",
-                                 "DEPARTAMENTO": "Departamento"}),
+        ROL=usuarios["ROL"].map(ROLES),
         DEPARTAMENTO=usuarios["DEPARTAMENTO"].map(
             lambda d: f"{d} · {nombres.get(d, '')}" if isinstance(d, str) else ""),
         ACTIVO=usuarios["ACTIVO"].map(lambda a: "Sí" if a else "No"))
@@ -410,8 +413,7 @@ def _admin_usuarios(repo, deptos: list[tuple]):
     with st.form("form_usuario", clear_on_submit=True):
         c1, c2, c3 = st.columns([3, 2, 3])
         email = c1.text_input("Correo", placeholder="nombre@ucsp.edu.pe")
-        rol = c2.selectbox("Rol", ["DEPARTAMENTO", "DGA", "PRESUPUESTO"],
-                           format_func=lambda r: r.capitalize())
+        rol = c2.selectbox("Rol", list(ROLES), format_func=ROLES.get)
         depto = c3.selectbox("Departamento (solo rol Departamento)", [d for d, _ in deptos],
                              format_func=lambda d: f"{d} · {nombres[d]}")
         b1, b2 = st.columns(2)

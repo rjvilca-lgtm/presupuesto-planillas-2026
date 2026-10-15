@@ -20,6 +20,7 @@ from src.config import cfg_de
 from src.flujo import (aviso_departamento, leer_flujo, marcar, ahora, panel_flujo,
                        vista_admin, vista_resumen)
 from src.reporte import vista_reporte
+from src.rrhh import vista_desarrollo_humano
 from src.repositorio import crear_repositorio, preparar_filas
 from src.validacion import conteo, estimar_importe, total_horas, validar
 from src.vistas import (TC_HOJAS, ficha_docente, grilla, hero,
@@ -50,6 +51,9 @@ def main():
     if usuario.presupuesto or usuario.dga:
         pestañas.append(("Carga académica · registro (DGA)",
                          lambda: registro_carga_academica(repo, fl)))
+    if usuario.rrhh:
+        pestañas.append(("Desarrollo Humano",
+                         lambda: vista_desarrollo_humano(repo, usuario, repo.departamentos())))
     pestañas.append(("Carga académica · consulta", lambda: consulta_carga_academica(repo, fl)))
     pestañas.append(("Resumen de valorización",
                      lambda: vista_reporte(repo, fl, usuario, repo.departamentos())))

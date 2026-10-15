@@ -572,7 +572,7 @@ BEGIN
                      ISNULL(Grado_de_Maestria,0)+ISNULL(Grado_de_Doctorado,0)+
                      ISNULL(Asignacion_por_Vivienda,0)+ISNULL(Asignacion_por_Hijo_Menor,0)+
                      ISNULL(Vale_por_Alimentos,0)),0) AS TotalRemuneracion
-            FROM dbo.Remuneraciones
+            FROM dbo.Remuneraciones_2027  -- copia 2027 (sql/crear_rol_desarrollo_humano.sql)
         )
         INSERT INTO PLANILLA (CENTRO_COSTO, PARTIDA, MES, IMPORTE, ORIGEN, ORIGEN_2, AÑO)
         SELECT 

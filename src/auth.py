@@ -6,7 +6,8 @@ traslados: requiere la sección [auth] en los secrets (client_id,
 client_secret, server_metadata_url, redirect_uri, cookie_secret) y Authlib.
 
 Los permisos salen de USUARIOS_PLANILLAS (sql/crear_usuarios_planillas.sql):
-PRESUPUESTO ve todo y administra, DGA registra la carga académica y
+PRESUPUESTO ve todo y administra, DGA registra la carga académica,
+DESARROLLO_HUMANO mantiene docentes, horas, tarifas y salarios, y
 DEPARTAMENTO registra las planillas de sus departamentos.
 
 Solo para probar en local, sin [auth]: [auth_dev] email = "..." en los
@@ -27,11 +28,12 @@ class Usuario:
     nombre: str
     presupuesto: bool = False
     dga: bool = False
+    rrhh: bool = False   # Desarrollo Humano
     departamentos: list = field(default_factory=list)
 
     @property
     def tiene_acceso(self) -> bool:
-        return self.presupuesto or self.dga or bool(self.departamentos)
+        return self.presupuesto or self.dga or self.rrhh or bool(self.departamentos)
 
 
 def _secrets_tiene(seccion: str) -> bool:
@@ -130,6 +132,8 @@ def exigir_login(repo) -> Usuario:
             usuario.presupuesto = True
         elif f["ROL"] == "DGA":
             usuario.dga = True
+        elif f["ROL"] == "DESARROLLO_HUMANO":
+            usuario.rrhh = True
         elif f["ROL"] == "DEPARTAMENTO" and f["DEPARTAMENTO"]:
             usuario.departamentos.append(f["DEPARTAMENTO"])
 
@@ -145,7 +149,7 @@ def exigir_login(repo) -> Usuario:
 def barra_usuario(usuario: Usuario):
     """Nombre, rol y botón de cerrar sesión, arriba a la derecha."""
     roles = (["Presupuesto"] if usuario.presupuesto else []) + \
-            (["DGA"] if usuario.dga else []) + usuario.departamentos
+            (["DGA"] if usuario.dga else []) +             (["Desarrollo Humano"] if usuario.rrhh else []) + usuario.departamentos
     c_info, c_btn = st.columns([6, 1], vertical_alignment="center")
     c_info.caption(f"👤 {usuario.nombre} · {usuario.email} · {', '.join(roles)}")
     if c_btn.button("Cerrar sesión", width="stretch", key="btn_logout"):

@@ -27,6 +27,15 @@ from .config import (CARGA_ACADEMICA, CONCEPTO_ACADEMICAS, MESES, PLANILLAS,
 # Columnas de DATOS_ENTRADA que se leen para retomar lo guardado
 COLS_ENTRADA = ["HOJA_ORIGEN", "DNI", "NOMBRE", "CENTRO_COSTO", "CONCEPTO", "CONCEPTO_2",
                 "TIPO", "TIPO_BLOQUE", "MES", "HORAS", "IMPORTE", "TARIFA"]
+# Componentes del salario (Remuneraciones_2027); el sp 2027 suma todos
+COLS_REMUNERACION = ["Basico", "Asignacion_Familiar", "Bonificacion_Docente_TC",
+                     "Bonificacion_Dedicacion_Exclusiva", "Bono_por_Decano",
+                     "Bono_por_Director_de_Escuela", "Bono_por_Departamento", "Bono_al_Cargo",
+                     "Bonificacion_Variable_por_Profesor_Extranjero",
+                     "Bonificacion_Ordinaria_por_Acuerdo_Rem", "Bonificacion_por_Representacion",
+                     "Grado_de_Maestria", "Grado_de_Doctorado", "Asignacion_por_Vivienda",
+                     "Asignacion_por_Hijo_Menor", "Vale_por_Alimentos"]
+DATOS_REMUNERACION = ["DNI", "Nombre", "Categoria", "DPTO"]
 CAMPOS_ESTADO = {"BLOQUEO", "CERRADO", "FECHA_GUARDADO", "FECHA_VALORIZACION",
                  "FECHA_CIERRE"}
 
@@ -310,6 +319,12 @@ class RepositorioSQL:
         self._database = s["database"]
         self._user = s["username"]
         self._password = s["password"]
+        # Opcional: credenciales propias para salarios ([sql_rrhh]), de un login
+        # de base de datos que sea el único con acceso a Remuneraciones_2027
+        try:
+            self._rrhh = dict(secrets["sql_rrhh"]) if "sql_rrhh" in secrets else None
+        except Exception:
+            self._rrhh = None
 
     @contextmanager
     def _conn(self):
@@ -512,6 +527,108 @@ class RepositorioSQL:
             f"WHEN NOT MATCHED THEN INSERT (PRESUPUESTO, DEPARTAMENTO, {', '.join(cols)}) "
             f"VALUES (s.PRESUPUESTO, s.DEPARTAMENTO, {', '.join(['%s'] * len(cols))});",
             [PRESUPUESTO, depto] + valores + valores)
+
+    # ------------------------------------------------ Desarrollo Humano
+
+    def _auditar(self, cur, email, tabla, accion, dni=None, detalle=None):
+        cur.execute("INSERT INTO AUDITORIA_DESARROLLO_HUMANO (EMAIL, TABLA, DNI, ACCION, DETALLE) "
+                    "VALUES (%s, %s, %s, %s, %s)", [email, tabla, dni, accion, detalle])
+
+    def _transaccion(self, conn_ctx, trabajo):
+        with conn_ctx as conn:
+            cur = conn.cursor()
+            try:
+                trabajo(cur)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        self.limpiar_cache()
+
+    def horas_docentes_todos(self) -> pd.DataFrame:
+        df = self._leer_vivo("SELECT DPTO, DNI, NOMBRE, CAST(HORAS AS float) AS HORAS "
+                             "FROM HORAS_DOCENTES ORDER BY DPTO, NOMBRE")
+        return df
+
+    def guardar_horas_docentes(self, filas: list[list], email: str) -> int:
+        """Reemplaza la lista completa de docentes TC y sus horas."""
+        def trabajo(cur):
+            cur.execute("DECLARE @r int; EXEC @r = sp_getapplock @Resource = 'HORAS_DOCENTES', "
+                        "@LockMode = 'Exclusive', @LockOwner = 'Transaction', "
+                        "@LockTimeout = 30000; IF @r < 0 THROW 50021, 'Otro guardado en curso.', 1;")
+            cur.execute("DELETE FROM HORAS_DOCENTES")
+            cur.executemany("INSERT INTO HORAS_DOCENTES (DPTO, DNI, NOMBRE, HORAS) "
+                            "VALUES (%s, %s, %s, %s)", filas)
+            self._auditar(cur, email, "HORAS_DOCENTES", "REEMPLAZO",
+                          detalle=f"{len(filas)} docente(s)")
+        self._transaccion(self._conn(), trabajo)
+        return len(filas)
+
+    def tarifas_todas(self) -> pd.DataFrame:
+        return self._leer_vivo("SELECT HOJA_ORIGEN, TIPO, CAST(TARIFA AS float) AS TARIFA "
+                               "FROM tarifas_2027 ORDER BY HOJA_ORIGEN, TIPO")
+
+    def guardar_tarifas(self, cambios: list[tuple], email: str):
+        """cambios: (hoja, tipo, tarifa_anterior, tarifa_nueva). Las tarifas no
+        son confidenciales: la auditoría guarda los valores."""
+        def trabajo(cur):
+            for hoja, tipo, antes, despues in cambios:
+                cur.execute("UPDATE tarifas_2027 SET TARIFA = %s "
+                            "WHERE HOJA_ORIGEN = %s AND TIPO = %s", [despues, hoja, tipo])
+                self._auditar(cur, email, "tarifas_2027", "CAMBIO",
+                              detalle=f"{tipo} ({hoja}): {antes} -> {despues}")
+        self._transaccion(self._conn(), trabajo)
+
+    @contextmanager
+    def _conn_rrhh(self):
+        c = self._rrhh or {}
+        conn = _conectar_con_timeout(
+            c.get("server", self._server), int(c.get("port", self._port)),
+            c.get("database", self._database), c.get("username", self._user),
+            c.get("password", self._password))
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def remuneraciones(self) -> pd.DataFrame:
+        """Salarios 2027. Confidencial: lectura directa, SIN caché (la caché de
+        Streamlit es memoria compartida del servidor) y nunca se imprime."""
+        cols = ", ".join(DATOS_REMUNERACION + [f"CAST({c} AS float) AS {c}"
+                                                for c in COLS_REMUNERACION])
+        with self._conn_rrhh() as conn:
+            cur = conn.cursor()
+            cur.execute(f"SELECT {cols} FROM Remuneraciones_2027 ORDER BY Nombre")
+            nombres = [d[0] for d in cur.description]
+            datos = cur.fetchall()
+            conn.rollback()
+        return pd.DataFrame(datos, columns=nombres)
+
+    def guardar_remuneracion(self, dni: str, datos: dict, email: str, nuevo: bool):
+        """Alta o cambio de un docente. La auditoría registra solo los nombres
+        de los campos cambiados, nunca los montos."""
+        cols = [c for c in datos if c in COLS_REMUNERACION + DATOS_REMUNERACION and c != "DNI"]
+        def trabajo(cur):
+            if nuevo:
+                cur.execute(f"INSERT INTO Remuneraciones_2027 (DNI, {', '.join(cols)}) "
+                            f"VALUES (%s, {', '.join(['%s'] * len(cols))})",
+                            [dni] + [datos[c] for c in cols])
+            else:
+                cur.execute(f"UPDATE Remuneraciones_2027 SET {', '.join(f'{c} = %s' for c in cols)} "
+                            "WHERE DNI = %s", [datos[c] for c in cols] + [dni])
+            self._auditar(cur, email, "Remuneraciones_2027", "ALTA" if nuevo else "CAMBIO",
+                          dni, "Campos: " + ", ".join(cols))
+        self._transaccion(self._conn_rrhh(), trabajo)
+
+    def eliminar_remuneracion(self, dni: str, email: str):
+        def trabajo(cur):
+            cur.execute("DELETE FROM Remuneraciones_2027 WHERE DNI = %s", [dni])
+            self._auditar(cur, email, "Remuneraciones_2027", "BAJA", dni)
+        self._transaccion(self._conn_rrhh(), trabajo)
+
+    def auditoria_dh(self) -> pd.DataFrame:
+        return self._leer_vivo("SELECT TOP 200 FECHA, EMAIL, TABLA, DNI, ACCION, DETALLE "
+                               "FROM AUDITORIA_DESARROLLO_HUMANO ORDER BY ID DESC")
 
     def valorizacion(self, anio: int, origenes: list[str]) -> pd.DataFrame:
         """Montos de PLANILLA por departamento (ORIGEN_2), planilla, partida,
