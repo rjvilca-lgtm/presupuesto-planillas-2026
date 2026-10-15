@@ -23,6 +23,8 @@ Campos:
   precarga     CSV (ruta relativa al repo) con filas que la grilla trae ya
                cargadas; sus columnas son dimensiones o columnas_info.
   columnas_info  Columnas que se muestran en la grilla pero no se guardan.
+  opciones     {dimensión: [valores]}: la columna se elige de una lista cerrada
+               (los sp reconocen esos textos exactos).
   usa_roster   Si True, la grilla se pre-puebla con el padrón de docentes del
                departamento para que el usuario solo complete la métrica.
                También activa la ficha por docente (vistas.ficha_docente) en
@@ -166,6 +168,8 @@ PLANILLAS = {
         "metrica": "IMPORTE",
         "dimensiones": ["CONCEPTO", "CONCEPTO_2", "CENTRO_COSTO", "TIPO", "MES"],
         "tarifa": None,
+        # sp_Valorizar_Postgrado solo valoriza estos dos tipos
+        "opciones": {"TIPO": ["Tiempo Parcial", "Tiempo Completo"]},
         "usa_roster": False,
         "sps": [("sp_Valorizar_Postgrado_2027", True)],
         "ayuda": "Ingresa el importe presupuestado por programa y mes.",
@@ -175,6 +179,12 @@ PLANILLAS = {
         "metrica": "IMPORTE",
         "dimensiones": ["CONCEPTO", "CONCEPTO_2", "CENTRO_COSTO", "MES"],
         "tarifa": None,
+        "opciones": {"CONCEPTO": [
+            "HORAS INVESTIGACION - ADMINISTRATIVO TIEMPO PARCIAL",
+            "HORAS INVESTIGACION - ADMINISTRATIVO TIEMPO COMPLETO",
+            "HORAS INVESTIGACION - DOCENTE TIEMPO PARCIAL",
+            "HORAS INVESTIGACION - DOCENTE TIEMPO COMPLETO",
+        ]},
         "usa_roster": False,
         "sps": [("sp_Valorizar_Investigacion_2027", True)],
         "ayuda": "Ingresa el importe presupuestado por línea y mes.",

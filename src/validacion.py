@@ -94,6 +94,12 @@ def validar(hoja: str, df: pd.DataFrame, ccos_validos: set, tarifas: dict) -> li
         errores.append("Estos centros de costo no pertenecen a tu departamento: "
                        + ", ".join(sorted(map(str, fuera))))
 
+    for col, valores in cfg.get("opciones", {}).items():
+        malos = set(sub[col].dropna().astype(str)) - set(valores) - {""}
+        if malos:
+            errores.append(f"{_nombre_dim(col).capitalize()} no válido: "
+                           + ", ".join(sorted(malos)) + ". Elige uno de la lista.")
+
     if cfg["usa_roster"]:
         errores += _validar_plan_tc(sub, val.loc[sub.index])
 

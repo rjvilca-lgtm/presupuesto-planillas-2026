@@ -275,6 +275,10 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
             help="La tarifa se aplica sola según el tipo. No se teclea el precio."
             if not cfg.get("tarifa_editable") else
             "Al elegir el tipo se llena la tarifa 2027; puedes cambiarla.")
+    for col, valores in cfg.get("opciones", {}).items():
+        colcfg[col] = st.column_config.SelectboxColumn(
+            {"CONCEPTO": "Concepto", "TIPO": "Tipo"}.get(col, col.title()),
+            options=valores, required=True, width="large" if col == "CONCEPTO" else "medium")
     if cfg.get("tarifa_editable"):
         colcfg["TARIFA"] = st.column_config.NumberColumn(
             "Tarifa (S/ por hora)", min_value=0.0, format="%.2f", width="small",
