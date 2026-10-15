@@ -27,3 +27,6 @@ Thumbs.db
 traslados-ucsp-main/
 traslados-ucsp-main.zip
 logs.txt
+
+# Plantillas en blanco de Desarrollo Humano (sin datos)
+!plantillas/*.xlsx

@@ -6,3 +6,4 @@ certifi>=2024.0.0
 pyOpenSSL>=24.0,<26  # 26 quitó X509.get_extension, que pytds usa para validar el host
 Authlib>=1.3.2  # login con Google (st.login)
 httpx  # lo usa Authlib en el login; sin él /auth/login da "Internal server error"
+openpyxl>=3.1  # plantillas Excel de Desarrollo Humano

@@ -550,8 +550,9 @@ class RepositorioSQL:
                              "FROM HORAS_DOCENTES ORDER BY DPTO, NOMBRE")
         return df
 
-    def guardar_horas_docentes(self, filas: list[list], email: str) -> int:
-        """Reemplaza la lista completa de docentes TC y sus horas."""
+    def guardar_horas_docentes(self, filas: list[list], email: str,
+                               movimientos: pd.DataFrame | None = None) -> int:
+        """Reemplaza la lista completa de docentes TC y sus horas (carga Excel)."""
         def trabajo(cur):
             cur.execute("DECLARE @r int; EXEC @r = sp_getapplock @Resource = 'HORAS_DOCENTES', "
                         "@LockMode = 'Exclusive', @LockOwner = 'Transaction', "
@@ -559,8 +560,12 @@ class RepositorioSQL:
             cur.execute("DELETE FROM HORAS_DOCENTES")
             cur.executemany("INSERT INTO HORAS_DOCENTES (DPTO, DNI, NOMBRE, HORAS) "
                             "VALUES (%s, %s, %s, %s)", filas)
-            self._auditar(cur, email, "HORAS_DOCENTES", "REEMPLAZO",
+            self._auditar(cur, email, "HORAS_DOCENTES", "CARGA EXCEL",
                           detalle=f"{len(filas)} docente(s)")
+            for m in (movimientos.itertuples(index=False) if movimientos is not None else []):
+                if m.Movimiento != "Sin cambios":
+                    self._auditar(cur, email, "HORAS_DOCENTES", m.Movimiento.upper(), m.DNI,
+                                  ("Campos: " + m._3) if m._3 else None)
         self._transaccion(self._conn(), trabajo)
         return len(filas)
 
@@ -604,27 +609,27 @@ class RepositorioSQL:
             conn.rollback()
         return pd.DataFrame(datos, columns=nombres)
 
-    def guardar_remuneracion(self, dni: str, datos: dict, email: str, nuevo: bool):
-        """Alta o cambio de un docente. La auditoría registra solo los nombres
-        de los campos cambiados, nunca los montos."""
-        cols = [c for c in datos if c in COLS_REMUNERACION + DATOS_REMUNERACION and c != "DNI"]
+    def reemplazar_remuneraciones(self, filas: list[list], movimientos: pd.DataFrame,
+                                  email: str) -> int:
+        """Reemplaza todos los salarios 2027 con los del Excel (lista completa),
+        en una transacción. Auditoría: una fila por alta, baja o cambio, con
+        los NOMBRES de los campos cambiados y nunca los montos."""
+        cols = DATOS_REMUNERACION + COLS_REMUNERACION
         def trabajo(cur):
-            if nuevo:
-                cur.execute(f"INSERT INTO Remuneraciones_2027 (DNI, {', '.join(cols)}) "
-                            f"VALUES (%s, {', '.join(['%s'] * len(cols))})",
-                            [dni] + [datos[c] for c in cols])
-            else:
-                cur.execute(f"UPDATE Remuneraciones_2027 SET {', '.join(f'{c} = %s' for c in cols)} "
-                            "WHERE DNI = %s", [datos[c] for c in cols] + [dni])
-            self._auditar(cur, email, "Remuneraciones_2027", "ALTA" if nuevo else "CAMBIO",
-                          dni, "Campos: " + ", ".join(cols))
+            cur.execute("DECLARE @r int; EXEC @r = sp_getapplock @Resource = 'Remuneraciones_2027', "
+                        "@LockMode = 'Exclusive', @LockOwner = 'Transaction', "
+                        "@LockTimeout = 30000; IF @r < 0 THROW 50022, 'Otra carga en curso.', 1;")
+            cur.execute("DELETE FROM Remuneraciones_2027")
+            cur.executemany(f"INSERT INTO Remuneraciones_2027 ({', '.join(cols)}) "
+                            f"VALUES ({', '.join(['%s'] * len(cols))})", filas)
+            self._auditar(cur, email, "Remuneraciones_2027", "CARGA EXCEL",
+                          detalle=f"{len(filas)} docente(s)")
+            for m in movimientos.itertuples(index=False):
+                if m.Movimiento != "Sin cambios":
+                    self._auditar(cur, email, "Remuneraciones_2027", m.Movimiento.upper(), m.DNI,
+                                  ("Campos: " + m._3) if m._3 else None)
         self._transaccion(self._conn_rrhh(), trabajo)
-
-    def eliminar_remuneracion(self, dni: str, email: str):
-        def trabajo(cur):
-            cur.execute("DELETE FROM Remuneraciones_2027 WHERE DNI = %s", [dni])
-            self._auditar(cur, email, "Remuneraciones_2027", "BAJA", dni)
-        self._transaccion(self._conn_rrhh(), trabajo)
+        return len(filas)
 
     def auditoria_dh(self) -> pd.DataFrame:
         return self._leer_vivo("SELECT TOP 200 FECHA, EMAIL, TABLA, DNI, ACCION, DETALLE "
