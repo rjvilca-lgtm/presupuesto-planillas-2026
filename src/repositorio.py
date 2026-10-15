@@ -228,8 +228,19 @@ def _conectar_con_timeout(server, port, database, user, password):
             # corta la conexión. certifi.where() da el bundle de CAs
             # públicas que valida el certificado de *.database.windows.net.
             cafile=certifi.where(),
+            validate_host=True,   # el certificado debe ser de este servidor
         )
-        print(f"[sql] conectado en {time.time() - t0:.1f}s", flush=True)
+        # Comunicación cifrada obligatoria: si la sesión no quedó con TLS, no se usa
+        cur = conn.cursor()
+        cur.execute("SELECT encrypt_option FROM sys.dm_exec_connections "
+                    "WHERE session_id = @@SPID")
+        cifrada = str(cur.fetchone()[0]).upper() == "TRUE"
+        conn.rollback()
+        if not cifrada:
+            conn.close()
+            raise ConnectionError("La conexión con la base de datos no está cifrada; "
+                                  "se rechazó por seguridad.")
+        print(f"[sql] conectado (cifrado TLS) en {time.time() - t0:.1f}s", flush=True)
         return conn
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
@@ -550,24 +561,11 @@ class RepositorioSQL:
                              "FROM HORAS_DOCENTES ORDER BY DPTO, NOMBRE")
         return df
 
-    def guardar_horas_docentes(self, filas: list[list], email: str,
-                               movimientos: pd.DataFrame | None = None) -> int:
-        """Reemplaza la lista completa de docentes TC y sus horas (carga Excel)."""
-        def trabajo(cur):
-            cur.execute("DECLARE @r int; EXEC @r = sp_getapplock @Resource = 'HORAS_DOCENTES', "
-                        "@LockMode = 'Exclusive', @LockOwner = 'Transaction', "
-                        "@LockTimeout = 30000; IF @r < 0 THROW 50021, 'Otro guardado en curso.', 1;")
-            cur.execute("DELETE FROM HORAS_DOCENTES")
-            cur.executemany("INSERT INTO HORAS_DOCENTES (DPTO, DNI, NOMBRE, HORAS) "
-                            "VALUES (%s, %s, %s, %s)", filas)
-            self._auditar(cur, email, "HORAS_DOCENTES", "CARGA EXCEL",
-                          detalle=f"{len(filas)} docente(s)")
-            for m in (movimientos.itertuples(index=False) if movimientos is not None else []):
-                if m.Movimiento != "Sin cambios":
-                    self._auditar(cur, email, "HORAS_DOCENTES", m.Movimiento.upper(), m.DNI,
-                                  ("Campos: " + m._3) if m._3 else None)
-        self._transaccion(self._conn(), trabajo)
-        return len(filas)
+    def dni_con_plan_tc(self) -> pd.DataFrame:
+        """Docentes que ya tienen plan TC 2027 guardado por su departamento."""
+        return self._leer_vivo(
+            "SELECT DISTINCT ORIGEN, DNI FROM DATOS_ENTRADA WHERE PRESUPUESTO = %s "
+            "AND HOJA_ORIGEN IN ('1. Plan TC-I', 'Plan TC-II')", (PRESUPUESTO,))
 
     def tarifas_todas(self) -> pd.DataFrame:
         return self._leer_vivo("SELECT HOJA_ORIGEN, TIPO, CAST(TARIFA AS float) AS TARIFA "
@@ -609,27 +607,44 @@ class RepositorioSQL:
             conn.rollback()
         return pd.DataFrame(datos, columns=nombres)
 
-    def reemplazar_remuneraciones(self, filas: list[list], movimientos: pd.DataFrame,
-                                  email: str) -> int:
-        """Reemplaza todos los salarios 2027 con los del Excel (lista completa),
-        en una transacción. Auditoría: una fila por alta, baja o cambio, con
-        los NOMBRES de los campos cambiados y nunca los montos."""
-        cols = DATOS_REMUNERACION + COLS_REMUNERACION
-        def trabajo(cur):
-            cur.execute("DECLARE @r int; EXEC @r = sp_getapplock @Resource = 'Remuneraciones_2027', "
-                        "@LockMode = 'Exclusive', @LockOwner = 'Transaction', "
-                        "@LockTimeout = 30000; IF @r < 0 THROW 50022, 'Otra carga en curso.', 1;")
+    def importar_rrhh(self, docentes: list[list], salarios: list[list], email: str,
+                      detalle: str) -> None:
+        """Importación de la plantilla única: reemplaza el padrón de docentes TC
+        y los salarios 2027. Con una sola cuenta de base de datos va todo en una
+        transacción; con [sql_rrhh] (cuenta propia para salarios) son dos, primero
+        salarios. La auditoría guarda solo conteos."""
+        cols_sal = DATOS_REMUNERACION + COLS_REMUNERACION
+        bloqueo = ("DECLARE @r int; EXEC @r = sp_getapplock @Resource = 'IMPORTAR_RRHH', "
+                   "@LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 30000; "
+                   "IF @r < 0 THROW 50023, 'Otra importación en curso; intenta de nuevo.', 1;")
+
+        def padron(cur):
+            cur.execute("DELETE FROM HORAS_DOCENTES")
+            cur.executemany("INSERT INTO HORAS_DOCENTES (DPTO, DNI, NOMBRE, HORAS) "
+                            "VALUES (%s, %s, %s, %s)", docentes)
+
+        def sueldos(cur):
             cur.execute("DELETE FROM Remuneraciones_2027")
-            cur.executemany(f"INSERT INTO Remuneraciones_2027 ({', '.join(cols)}) "
-                            f"VALUES ({', '.join(['%s'] * len(cols))})", filas)
-            self._auditar(cur, email, "Remuneraciones_2027", "CARGA EXCEL",
-                          detalle=f"{len(filas)} docente(s)")
-            for m in movimientos.itertuples(index=False):
-                if m.Movimiento != "Sin cambios":
-                    self._auditar(cur, email, "Remuneraciones_2027", m.Movimiento.upper(), m.DNI,
-                                  ("Campos: " + m._3) if m._3 else None)
-        self._transaccion(self._conn_rrhh(), trabajo)
-        return len(filas)
+            cur.executemany(f"INSERT INTO Remuneraciones_2027 ({', '.join(cols_sal)}) "
+                            f"VALUES ({', '.join(['%s'] * len(cols_sal))})", salarios)
+
+        if self._rrhh is None:
+            def todo(cur):
+                cur.execute(bloqueo)
+                sueldos(cur)
+                padron(cur)
+                self._auditar(cur, email, "IMPORTACION", "CARGA EXCEL", detalle=detalle)
+            self._transaccion(self._conn(), todo)
+        else:
+            def solo_sueldos(cur):
+                cur.execute(bloqueo)
+                sueldos(cur)
+            def solo_padron(cur):
+                cur.execute(bloqueo)
+                padron(cur)
+                self._auditar(cur, email, "IMPORTACION", "CARGA EXCEL", detalle=detalle)
+            self._transaccion(self._conn_rrhh(), solo_sueldos)
+            self._transaccion(self._conn(), solo_padron)
 
     def auditoria_dh(self) -> pd.DataFrame:
         return self._leer_vivo("SELECT TOP 200 FECHA, EMAIL, TABLA, DNI, ACCION, DETALLE "
