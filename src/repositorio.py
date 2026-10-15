@@ -215,6 +215,22 @@ class RepositorioDemo:
 TIMEOUT_CONEXION = 15
 
 
+def _cifrada(conn) -> bool:
+    """¿La sesión quedó cifrada con TLS? Se mira el socket de pytds
+    (EncryptedSocket), que no exige permisos en la base: las cuentas con
+    permisos mínimos (sql/crear_permisos_app.sql) no pueden leer
+    sys.dm_exec_connections. Si pytds cambiara por dentro, se pregunta al
+    servidor."""
+    sock = getattr(getattr(conn, "_tds_socket", None), "sock", None)
+    if sock is not None:
+        return type(sock).__name__ == "EncryptedSocket"
+    cur = conn.cursor()
+    cur.execute("SELECT encrypt_option FROM sys.dm_exec_connections WHERE session_id = @@SPID")
+    cifrada = str(cur.fetchone()[0]).upper() == "TRUE"
+    conn.rollback()
+    return cifrada
+
+
 def _conectar_con_timeout(server, port, database, user, password):
     import certifi
     import pytds
@@ -234,12 +250,7 @@ def _conectar_con_timeout(server, port, database, user, password):
             validate_host=True,   # el certificado debe ser de este servidor
         )
         # Comunicación cifrada obligatoria: si la sesión no quedó con TLS, no se usa
-        cur = conn.cursor()
-        cur.execute("SELECT encrypt_option FROM sys.dm_exec_connections "
-                    "WHERE session_id = @@SPID")
-        cifrada = str(cur.fetchone()[0]).upper() == "TRUE"
-        conn.rollback()
-        if not cifrada:
+        if not _cifrada(conn):
             conn.close()
             raise ConnectionError("La conexión con la base de datos no está cifrada; "
                                   "se rechazó por seguridad.")

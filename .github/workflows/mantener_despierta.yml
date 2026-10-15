@@ -1,0 +1,25 @@
+# Visita la app cada 4 horas para que Streamlit Community Cloud no la duerma
+# (la duerme tras 12 h sin visitas). También se puede correr a mano desde la
+# pestaña Actions de GitHub ("Run workflow").
+name: Mantener la app despierta
+
+on:
+  schedule:
+    - cron: "17 */4 * * *"   # cada 4 horas (hora UTC)
+  workflow_dispatch:
+
+jobs:
+  visitar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar navegador
+        run: |
+          pip install playwright==1.48.0
+          python -m playwright install --with-deps chromium
+      - name: Visitar la app
+        run: python .github/scripts/despertar.py
