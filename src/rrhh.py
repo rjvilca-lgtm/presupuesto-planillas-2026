@@ -244,12 +244,15 @@ def _valorizacion_ddh(repo, usuario):
             key="conf_ddh")
     if st.button("Importar valorización DDH", type="primary", disabled=not acepta,
                  key="btn_importar_ddh"):
-        with st.spinner("Importando…"):
+        aviso = (" Puede tardar unos 30 s por cada 13 mil filas nuevas o cambiadas."
+                 if len(datos) > 2000 else "")
+        with st.spinner("Importando…" + aviso):
             try:
-                n = repo.importar_ddh(datos, usuario.email)
-                res = (True, f"Valorización DDH 2027 importada: {n:,} filas, "
-                             f"S/ {datos['IMPORTE'].sum():,.2f}. Recuerda borrar el archivo "
-                             "de tu equipo.")
+                r = repo.importar_ddh(datos, usuario.email)
+                res = (True, f"Valorización DDH 2027 importada: {r['filas']:,} filas, "
+                             f"S/ {datos['IMPORTE'].sum():,.2f} ({r['insertadas']:,} nuevas, "
+                             f"{r['borradas']:,} quitadas, {r['filas'] - r['insertadas']:,} sin "
+                             "cambios). Recuerda borrar el archivo de tu equipo.")
             except Exception as ex:
                 res = (False, "No se importó nada; se revirtió la operación. Detalle: "
                               f"{type(ex).__name__}: {str(ex)[:200]}")

@@ -735,34 +735,56 @@ class RepositorioSQL:
             "SELECT AÑO AS ANIO, COUNT(*) AS FILAS, CAST(SUM(IMPORTE) AS float) AS TOTAL "
             "FROM PLANILLA WHERE ORIGEN_2 = 'DDH' AND AÑO IN ('2026', '2027') GROUP BY AÑO")
 
-    def importar_ddh(self, df: pd.DataFrame, email: str) -> int:
-        """Deja las filas en CARGA_DDH_2027 y sp_Importar_DDH_2027 reemplaza la
-        valorización DDH 2027 en PLANILLA, todo en una transacción. Va con la
-        cuenta de Desarrollo Humano ([sql_rrhh]) si está configurada.
-        Inserta en lotes de 300 filas (6 parámetros por fila; SQL Server
-        admite hasta 2100 por sentencia): fila por fila serían miles de idas y
-        vueltas a la base."""
-        cols = ["CENTRO_COSTO", "PARTIDA", "DIMENSION", "MES", "IMPORTE", "CONCEPTO"]
-        filas = [[r.CENTRO_COSTO, r.PARTIDA, r.DIMENSION, int(r.MES), float(r.IMPORTE),
-                  r.CONCEPTO or None] for r in df[cols].itertuples(index=False)]
-        marcas = "(" + ", ".join(["%s"] * len(cols)) + ")"
+    def importar_ddh(self, df: pd.DataFrame, email: str) -> dict:
+        """Reemplaza la valorización DDH 2027 en PLANILLA, en una transacción.
+        Va con la cuenta de Desarrollo Humano ([sql_rrhh]) si está configurada.
+
+        En el nivel Basic de Azure lo que limita es la escritura del log, así que:
+          - las filas se cargan con bulk copy (una sola operación, no miles de
+            INSERT) en una tabla temporal #CARGA_DDH, que no escribe en el log
+            de la base;
+          - sp_Importar_DDH_2027 escribe solo las diferencias con lo que ya
+            está en PLANILLA (reimportar un archivo corregido toca pocas filas).
+        Devuelve {filas, insertadas, borradas}."""
+        from decimal import Decimal
+
+        from pytds.tds_base import Column
+        from pytds.tds_types import DecimalType, IntType, VarCharType
+
+        columnas = [Column("CENTRO_COSTO", VarCharType(size=50), 0),
+                    Column("PARTIDA", VarCharType(size=50), 0),
+                    Column("DIMENSION", VarCharType(size=50), 0),
+                    Column("MES", IntType(), 0),
+                    Column("IMPORTE", DecimalType(precision=10, scale=2), 0),
+                    Column("CONCEPTO", VarCharType(size=100), Column.fNullable)]
+        filas = [(r.CENTRO_COSTO, r.PARTIDA, r.DIMENSION, int(r.MES),
+                  Decimal(f"{r.IMPORTE:.2f}"), r.CONCEPTO or None)
+                 for r in df.itertuples(index=False)]
+        resultado = {}
 
         def trabajo(cur):
             cur.execute("DECLARE @r int; EXEC @r = sp_getapplock @Resource = 'IMPORTAR_DDH', "
                         "@LockMode = 'Exclusive', @LockOwner = 'Transaction', "
                         "@LockTimeout = 30000; IF @r < 0 THROW 50033, "
                         "'Otra importación de DDH en curso; intenta de nuevo.', 1;")
-            cur.execute("DELETE FROM CARGA_DDH_2027")
-            for i in range(0, len(filas), 300):
-                lote = filas[i:i + 300]
-                cur.execute(f"INSERT INTO CARGA_DDH_2027 ({', '.join(cols)}) VALUES "
-                            + ", ".join([marcas] * len(lote)),
-                            [v for fila in lote for v in fila])
+            cur.execute("IF OBJECT_ID('tempdb..#CARGA_DDH') IS NOT NULL DROP TABLE #CARGA_DDH; "
+                        "CREATE TABLE #CARGA_DDH (CENTRO_COSTO varchar(50) NOT NULL, "
+                        "PARTIDA varchar(50) NOT NULL, DIMENSION varchar(50) NOT NULL, "
+                        "MES int NOT NULL, IMPORTE decimal(10,2) NOT NULL, "
+                        "CONCEPTO varchar(100) NULL)")
+            cur.copy_to(table_or_view="#CARGA_DDH", columns=columnas, data=filas,
+                        check_constraints=True, tablock=True)
             cur.execute("EXEC sp_Importar_DDH_2027 @Email = %s", [email])
+            while cur.description is None and cur.nextset():   # hasta el SELECT final
+                pass
+            n, insertadas, borradas = cur.fetchone()
+            resultado.update(filas=n, insertadas=insertadas, borradas=borradas)
+            cur.execute("DROP TABLE #CARGA_DDH")
 
-        print(f"[ddh] importando {len(filas)} fila(s)", flush=True)
+        t0 = time.time()
         self._transaccion(self._conn_rrhh(), trabajo)
-        return len(filas)
+        print(f"[ddh] {resultado} en {time.time() - t0:.1f}s", flush=True)
+        return resultado
 
     # ------------------------------------------------ Parámetros 2027
 
