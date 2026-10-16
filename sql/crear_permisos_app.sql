@@ -76,6 +76,12 @@ GRANT EXECUTE ON dbo.sp_Valorizar_Postgrado_2027        TO rol_app_planillas;
 GRANT EXECUTE ON dbo.sp_Valorizar_Investigacion_2027    TO rol_app_planillas;
 GRANT EXECUTE ON dbo.sp_Valorizar_Ayudantias_2027       TO rol_app_planillas;
 GRANT EXECUTE ON dbo.sp_Valorizar_CargaAcademica_2027   TO rol_app_planillas;
+-- Limpieza de datos 2027 (sql/crear_limpieza_2027.sql), si ya existe
+IF OBJECT_ID('dbo.sp_Limpiar_2027', 'P') IS NOT NULL
+BEGIN
+    GRANT EXECUTE ON dbo.sp_Limpiar_2027 TO rol_app_planillas;
+    GRANT SELECT ON dbo.AUDITORIA_LIMPIEZA_2027 TO rol_app_planillas;
+END;
 
 -- Salarios: prohibido leerlos directamente (aunque alguien agregue permisos
 -- más amplios después). No afecta a los sp, que no revisan permisos al leer

@@ -195,6 +195,9 @@ class RepositorioDemo:
     def ddh_disponible(self) -> bool:
         return False
 
+    def limpieza_disponible(self) -> bool:
+        return False
+
     def permisos_usuario(self, email: str) -> pd.DataFrame:
         filas = [u for u in self._usuarios if u["EMAIL"] == email and u.get("ACTIVO", True)]
         return pd.DataFrame(filas, columns=["ROL", "DEPARTAMENTO"])
@@ -801,6 +804,52 @@ class RepositorioSQL:
         self._transaccion(self._conn_rrhh(), trabajo)
         print(f"[ddh] {resultado} en {time.time() - t0:.1f}s", flush=True)
         return resultado
+
+    # ------------------------------------------------ Limpieza 2027
+
+    def limpieza_disponible(self) -> bool:
+        df = self._leer_vivo("SELECT OBJECT_ID('dbo.sp_Limpiar_2027', 'P') AS ID")
+        return df["ID"].iloc[0] is not None
+
+    def conteos_2027(self) -> pd.DataFrame:
+        """Filas 2027 por departamento: borradores, valorización y estado."""
+        return self._leer_vivo(
+            "SELECT DEPTO, SUM(B) AS BORRADORES, SUM(V) AS VALORIZACION, SUM(E) AS ESTADO FROM ("
+            "  SELECT ORIGEN AS DEPTO, COUNT(*) AS B, 0 AS V, 0 AS E FROM DATOS_ENTRADA "
+            "  WHERE PRESUPUESTO = %s GROUP BY ORIGEN "
+            "  UNION ALL SELECT ORIGEN_2, 0, COUNT(*), 0 FROM PLANILLA "
+            "  WHERE AÑO = '2027' GROUP BY ORIGEN_2 "
+            "  UNION ALL SELECT DEPARTAMENTO, 0, 0, 1 FROM ESTADO_DEPARTAMENTO "
+            "  WHERE PRESUPUESTO = %s"
+            ") t GROUP BY DEPTO ORDER BY DEPTO", (PRESUPUESTO, PRESUPUESTO))
+
+    def limpiar_2027(self, deptos: list | None, borradores: bool, valorizacion: bool,
+                     estado: bool, email: str) -> dict:
+        """Borra lo elegido del presupuesto 2027 (deptos=None: todos) con
+        sp_Limpiar_2027, todo en una transacción. Devuelve las filas borradas."""
+        total = {"borradores": 0, "valorizacion": 0, "estado": 0}
+
+        def trabajo(cur):
+            for depto in (deptos or [None]):
+                cur.execute("EXEC sp_Limpiar_2027 @Departamento = %s, @Borradores = %s, "
+                            "@Valorizacion = %s, @Estado = %s, @Email = %s",
+                            [depto, borradores, valorizacion, estado, email])
+                while cur.description is None and cur.nextset():
+                    pass
+                b, v, e = cur.fetchone()
+                total["borradores"] += b
+                total["valorizacion"] += v
+                total["estado"] += e
+
+        self._transaccion(self._conn(), trabajo)
+        _leer_corto.clear()
+        print(f"[limpieza] {email}: {deptos or 'todos'} -> {total}", flush=True)
+        return total
+
+    def auditoria_limpieza(self) -> pd.DataFrame:
+        return self._leer_vivo("SELECT TOP 50 FECHA, EMAIL, ISNULL(DEPARTAMENTO, 'Todos') AS "
+                               "DEPARTAMENTO, BORRADORES, VALORIZACION, ESTADO "
+                               "FROM AUDITORIA_LIMPIEZA_2027 ORDER BY ID DESC")
 
     # ------------------------------------------------ Parámetros 2027
 

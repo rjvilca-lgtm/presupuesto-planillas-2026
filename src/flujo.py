@@ -389,6 +389,88 @@ def vista_admin(repo, fl: Flujo, deptos: list[tuple], usuario):
                "permite que DHUM, DMAT o DCN vuelvan a modificar; mientras no cierren de "
                "nuevo, la carga académica no se puede volver a valorizar.")
 
+    st.divider()
+    _admin_limpieza(repo, fl, deptos, usuario)
+
+
+_PARTES_LIMPIEZA = {
+    "BORRADORES": ("Borradores de las planillas",
+                   "Lo que cada departamento guardó (DATOS_ENTRADA 2027)."),
+    "VALORIZACION": ("Valorización", "Los montos calculados (PLANILLA 2027)."),
+    "ESTADO": ("Estado del flujo", "Fechas de guardado y valorización, cierres y bloqueos "
+                                  "por departamento."),
+}
+
+
+def _admin_limpieza(repo, fl: Flujo, deptos: list[tuple], usuario):
+    st.subheader("Limpiar datos 2027")
+    st.caption("Borra datos del presupuesto 2027, por ejemplo las pruebas, para dejar la app "
+               "lista para producción: todo o por partes y por departamento. No toca los datos "
+               "2026, catálogos, centros de costo, tarifas, parámetros, padrón, salarios, "
+               "usuarios ni el registro de cambios.")
+    resultado = st.session_state.pop("_res_limpieza", None)
+    if resultado:
+        (st.success if resultado[0] else st.error)(resultado[1],
+                                                   icon="✅" if resultado[0] else "🛑")
+    if not repo.limpieza_disponible():
+        st.warning("Falta preparar la base: ejecuta `sql/crear_limpieza_2027.sql` en Azure.",
+                   icon="⚠️")
+        return
+
+    conteos = repo.conteos_2027().set_index("DEPTO")
+    nombres = {**dict(deptos), DGA: "Carga académica (DGA)",
+               "DDH": "Valorización de Desarrollo Humano"}
+    opciones = list(dict.fromkeys([d for d, _ in deptos] + [DGA, "DDH"]
+                                  + [d for d in conteos.index if d]))
+    todos = st.toggle("Todos los departamentos", value=True, key="limpiar_todos")
+    elegidos = None if todos else st.multiselect(
+        "Departamentos", opciones, format_func=lambda d: f"{d} · {nombres.get(d, d)}",
+        key="limpiar_deptos")
+    partes = [k for k, (titulo, ayuda) in _PARTES_LIMPIEZA.items()
+              if st.checkbox(titulo, key=f"limpiar_{k}", help=ayuda)]
+    quitar_fecha = st.checkbox("Quitar la fecha de bloqueo general", key="limpiar_fecha",
+                               disabled=fl.fecha_bloqueo is None,
+                               help="Para empezar de nuevo cuando se limpia todo.")
+
+    alcance = conteos if todos else conteos.reindex(elegidos or []).fillna(0)
+    if partes:
+        vista = alcance[partes].astype(int)
+        vista.index = [f"{d} · {nombres.get(d, d)}" for d in vista.index]
+        st.markdown("**Se borrarán estas filas:**")
+        st.dataframe(vista.rename(columns={k: _PARTES_LIMPIEZA[k][0] for k in partes}),
+                     width="stretch")
+        st.caption("Total: " + " · ".join(
+            f"{_PARTES_LIMPIEZA[k][0]}: {int(alcance[k].sum()):,}" for k in partes))
+    st.info("Hazlo cuando nadie esté trabajando y pide a los usuarios que recarguen la "
+            "página: una sesión abierta con cambios sin guardar podría volver a guardarlos.",
+            icon="ℹ️")
+    confirma = st.text_input("Escribe BORRAR para confirmar", key="limpiar_confirma")
+    nada = not partes and not quitar_fecha
+    if st.button("Borrar", type="primary", key="btn_limpiar",
+                 disabled=nada or (not todos and not elegidos) or confirma.strip() != "BORRAR"):
+        with st.spinner("Borrando… En la base Basic de Azure puede tardar un par de minutos "
+                        "si hay muchas filas."):
+            try:
+                hecho = {"borradores": 0, "valorizacion": 0, "estado": 0}
+                if partes:
+                    hecho = repo.limpiar_2027(elegidos, "BORRADORES" in partes,
+                                              "VALORIZACION" in partes, "ESTADO" in partes,
+                                              usuario.email)
+                if quitar_fecha:
+                    repo.fijar_fecha_bloqueo(None)
+                res = (True, f"Listo. Borradores: {hecho['borradores']:,} filas · "
+                             f"Valorización: {hecho['valorizacion']:,} filas · Estado: "
+                             f"{hecho['estado']:,} departamento(s)"
+                             + (" · Fecha de bloqueo quitada." if quitar_fecha else "."))
+            except Exception as ex:
+                res = (False, f"No se borró nada; se revirtió la operación. Detalle: {ex}")
+        st.session_state["_res_limpieza"] = res
+        for k in ["limpiar_confirma", "limpiar_fecha"] + [f"limpiar_{k}" for k in _PARTES_LIMPIEZA]:
+            st.session_state.pop(k, None)
+        st.rerun()
+    with st.expander("Historial de limpiezas"):
+        st.dataframe(repo.auditoria_limpieza(), hide_index=True, width="stretch")
+
 
 def _equivale(codigo: str, valor: float) -> str:
     return f"× {valor:.4f}" if codigo.startswith("FACTOR") else f"{valor * 100:.2f} %"
