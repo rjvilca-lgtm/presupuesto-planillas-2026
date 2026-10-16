@@ -185,8 +185,10 @@ def _valorizacion_ddh(repo, usuario):
                "anterior. Esta pantalla no muestra las filas: solo errores y totales.")
     _mostrar_resultado("_res_ddh")
     if not repo.ddh_disponible():
-        st.warning("Falta preparar la base: ejecuta `sql/crear_carga_ddh_2027.sql` en Azure.",
-                   icon="⚠️")
+        st.warning("La cuenta de Desarrollo Humano no encuentra el procedimiento de "
+                   "importación. Revisa que se haya ejecutado `sql/crear_carga_ddh_2027.sql` y "
+                   "que la sección `[sql_rrhh]` de los secrets tenga la cuenta "
+                   "`app_planillas_rrhh`.", icon="⚠️")
         return
 
     totales = repo.totales_ddh().set_index("ANIO")

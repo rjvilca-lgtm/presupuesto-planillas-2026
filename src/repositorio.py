@@ -329,6 +329,17 @@ def _leer_historico(server, port, database, user, password,
     return _consultar(server, port, database, user, password, sql, params)
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _sp_visible(server, port, database, user, password, nombre: str) -> bool:
+    conn = _conectar_con_timeout(server, port, database, user, password)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT OBJECT_ID(%s, 'P')", [nombre])
+        return cur.fetchone()[0] is not None
+    finally:
+        conn.close()
+
+
 @st.cache_data(ttl=20, show_spinner=False)
 def _leer_corto(server, port, database, user, password,
                 sql: str, params: tuple) -> pd.DataFrame:
@@ -706,8 +717,13 @@ class RepositorioSQL:
     # ------------------------------------------------ Valorización DDH 2027
 
     def ddh_disponible(self) -> bool:
-        df = self._leer_vivo("SELECT OBJECT_ID('dbo.sp_Importar_DDH_2027', 'P') AS ID")
-        return df["ID"].iloc[0] is not None
+        """¿Existe sp_Importar_DDH_2027? Se pregunta con la cuenta que lo
+        ejecuta ([sql_rrhh]): OBJECT_ID devuelve NULL si la cuenta no tiene
+        permiso sobre el objeto, y la cuenta general no lo tiene."""
+        c = self._rrhh or {}
+        return _sp_visible(c.get("server", self._server), int(c.get("port", self._port)),
+                           c.get("database", self._database), c.get("username", self._user),
+                           c.get("password", self._password), "dbo.sp_Importar_DDH_2027")
 
     def dimensiones_ddh(self) -> pd.DataFrame:
         """Dimensiones de remuneraciones (20 Docencia, 22 Administrativa, ...),

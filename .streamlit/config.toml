@@ -8,3 +8,6 @@ font = "sans serif"
 
 [server]
 maxUploadSize = 5
+# Sin vigilar archivos: en Streamlit Cloud llenaba los logs con
+# "inotify instance limit reached" (el código cambia solo al hacer push)
+fileWatcherType = "none"
