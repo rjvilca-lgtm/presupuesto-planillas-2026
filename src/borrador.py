@@ -62,8 +62,17 @@ def pendiente(clave: str, firma_actual: str) -> bool:
     return hay
 
 
+def forzar_pendiente(clave: str):
+    """Para datos precargados que aún no están en la base: la planilla arranca
+    con 'cambios sin guardar'."""
+    st.session_state[_k(clave, "firma")] = "precargado"
+
+
 def marcar_guardado(clave: str, firma_actual: str):
     st.session_state[_k(clave, "firma")] = firma_actual
+    for k in [k for k in st.session_state if str(k).startswith("_precarga_")
+              and clave.replace("|", "_") in str(k)]:
+        st.session_state[k] = 0     # ya guardado: se quita el aviso de precarga
     st.session_state.pop(_k(clave, "desde"), None)
     st.session_state[_k(clave, "hora")] = time.strftime("%H:%M")
     st.session_state.setdefault("_borrador_pendientes", {})[clave] = False

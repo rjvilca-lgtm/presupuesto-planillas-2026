@@ -371,6 +371,26 @@ def _prellenar_tarifa(cfg, editado, previo, tarifas, base_key, ultimo_key, ver_k
     st.rerun()
 
 
+def _precargar_dictado(base: pd.DataFrame, prelim, guardado) -> int:
+    """Escribe las horas de dictado preliminares (académicas, y sus cronológicas
+    = académicas × 45/60 en el mismo centro de costo) de los docentes que aún
+    no tienen nada guardado en esta hoja. Devuelve cuántos docentes."""
+    if prelim is None or prelim.empty or base.empty:
+        return 0
+    ya = set(guardado["DNI"]) if guardado is not None and not guardado.empty else set()
+    p = prelim[~prelim["DNI"].isin(ya)]
+    if p.empty:
+        return 0
+    horas = {(d, c): h for d, c, h in zip(p["DNI"], p["CENTRO_COSTO"], p["HORAS"])}
+    clave = list(zip(base["DNI"], base["CENTRO_COSTO"]))
+    valor = pd.Series([horas.get(k) for k in clave], index=base.index, dtype="float64")
+    acad = base["CONCEPTO"].map(lambda c: es_concepto(c, CONCEPTO_ACADEMICAS))
+    cron = base["CONCEPTO"].map(lambda c: es_concepto(c, CONCEPTO_CRONOLOGICAS))
+    base.loc[acad & valor.notna(), "HORAS"] = valor[acad & valor.notna()]
+    base.loc[cron & valor.notna(), "HORAS"] = valor[cron & valor.notna()] * FACTOR_CRONOLOGICAS
+    return int(base.loc[acad & valor.notna(), "DNI"].nunique())
+
+
 def _semilla_ficha(roster: pd.DataFrame, estructura: pd.DataFrame,
                    guardado=None) -> pd.DataFrame:
     """Ledger inicial de la ficha: una fila por (docente, CECO, concepto),
@@ -438,7 +458,7 @@ def _completo(horas: float, meta: float) -> bool:
 
 def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                    roster: pd.DataFrame, origen: str, guardado=None,
-                   solo_lectura: bool = False) -> pd.DataFrame:
+                   solo_lectura: bool = False, prelim=None) -> pd.DataFrame:
     """Ficha por docente para las planillas TC: un valor de horas por
     (CECO, concepto): horas por mes, iguales todo el semestre. Devuelve un
     DataFrame con la misma forma que grilla() (dims_fila(cfg) + MESES) para
@@ -458,8 +478,19 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
 
     estado_key = f"_ficha_{cfg['_hoja']}_{origen}"
     if estado_key not in st.session_state:
-        st.session_state[estado_key] = _semilla_ficha(roster, estructura, guardado)
+        semilla = _semilla_ficha(roster, estructura, guardado)
+        n = 0 if solo_lectura else _precargar_dictado(semilla, prelim, guardado)
+        st.session_state[estado_key] = semilla
+        st.session_state[f"_precarga_{estado_key}"] = n
+        if n:
+            # Lo precargado aún no está guardado: que el indicador lo diga
+            from .borrador import forzar_pendiente
+            forzar_pendiente(f"{cfg['_hoja']}|{origen}")
     ledger = st.session_state[estado_key]
+    if st.session_state.get(f"_precarga_{estado_key}"):
+        st.info(f"Se precargaron las horas de dictado preliminares (base de horas TC 2027) de "
+                f"{st.session_state[f'_precarga_{estado_key}']} docente(s). Revísalas, completa "
+                "el resto del plan y guarda.", icon="📥")
 
     if ledger.empty:
         st.warning("No hay padrón de docentes ni estructura de CECO/conceptos "

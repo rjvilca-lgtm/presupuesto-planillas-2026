@@ -117,6 +117,7 @@ def vista_departamentos(repo, fl, usuario):
         st.caption(cfg_de(TC_HOJAS[0])["ayuda"])
         roster = repo.roster(origen)
         estructura = repo.estructura_tc(origen)
+        prelim = repo.horas_dictado_prelim(origen)
         pestañas = st.tabs(["I semestre (Ene-Jun)", "II semestre (Jul-Dic)"],
                            on_change="rerun", key=f"tabs_tc_{origen}")
         for hoja, tab in zip(TC_HOJAS, pestañas):
@@ -126,7 +127,7 @@ def vista_departamentos(repo, fl, usuario):
             with tab:
                 _renderizar_ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen,
                                      entrada[entrada["HOJA_ORIGEN"] == hoja], solo_lectura,
-                                     usuario)
+                                     usuario, prelim[prelim["HOJA_ORIGEN"] == hoja])
         return
 
     cfg = cfg_de(seleccion)
@@ -146,13 +147,14 @@ def _mostrar_resultado(hoja):
 
 
 def _renderizar_ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guardado,
-                         solo_lectura, usuario):
+                         solo_lectura, usuario, prelim=None):
     """Ficha TC (maestro-detalle) con guardado de borrador en la barra fija."""
     cfg = cfg_de(hoja)
     _mostrar_resultado(hoja)
     estado_ficha = f"_ficha_{hoja}_{origen}"   # ver vistas.ficha_docente
     borrador.mostrar_conflicto(hoja, origen, [estado_ficha], (f"h_{estado_ficha}_",))
-    editado = ficha_docente(cfg, ccos, estructura, roster, origen, guardado, solo_lectura)
+    editado = ficha_docente(cfg, ccos, estructura, roster, origen, guardado, solo_lectura,
+                            prelim)
 
     # La estructura TC puede traer CECOs de otros departamentos (docentes
     # transversales); son válidos porque vienen del catálogo, no del usuario.

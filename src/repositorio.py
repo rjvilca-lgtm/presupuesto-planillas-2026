@@ -152,6 +152,9 @@ class RepositorioDemo:
         # En demo no se persiste; se confirma como si hubiera cargado.
         return len(filas)
 
+    def horas_dictado_prelim(self, origen: str) -> pd.DataFrame:
+        return pd.DataFrame(columns=["DNI", "HOJA_ORIGEN", "CENTRO_COSTO", "HORAS"])
+
     def todos_centros_costo(self) -> pd.DataFrame:
         filas = sorted({f for lista in _CCOS_DEMO.values() for f in lista})
         return pd.DataFrame(filas, columns=["CODIGO_CECO", "DESCRIPCION_CECO"])
@@ -505,6 +508,18 @@ class RepositorioSQL:
             "AND LTRIM(RTRIM(de.CONCEPTO)) <> '0' "
             "ORDER BY CODIGO_CECO, CONCEPTO", (origen,))
 
+    def horas_dictado_prelim(self, origen: str) -> pd.DataFrame:
+        """Horas de dictado preliminares 2027 del departamento (DNI, hoja, centro
+        de costo, horas académicas) para precargar el Plan TC
+        (sql/crear_horas_dictado_prelim_2027.sql). Vacío si no hay tabla."""
+        vacio = pd.DataFrame(columns=["DNI", "HOJA_ORIGEN", "CENTRO_COSTO", "HORAS"])
+        existe = self._leer("SELECT OBJECT_ID('dbo.HORAS_DICTADO_PRELIM_2027', 'U') AS ID")
+        if existe["ID"].iloc[0] is None:
+            return vacio
+        df = self._leer("SELECT DNI, HOJA_ORIGEN, CENTRO_COSTO, CAST(HORAS AS float) AS HORAS "
+                        "FROM HORAS_DICTADO_PRELIM_2027 WHERE DPTO = %s", (origen,))
+        return df if not df.empty else vacio
+
     def todos_centros_costo(self) -> pd.DataFrame:
         tabla = "CENTROS_COSTOS_2027" if self._cecos_2027() else "CENTROS_COSTOS"
         return self._leer(
@@ -573,6 +588,7 @@ class RepositorioSQL:
             self.centros_costo(d)
             self.roster(d)
             self.estructura_tc(d)
+            self.horas_dictado_prelim(d)
         for hoja, cfg in PLANILLAS.items():
             if cfg["tarifa"] == "catalogo":
                 self.tarifas(hoja)
