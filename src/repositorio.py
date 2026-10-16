@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import queue
+from datetime import datetime, timedelta, timezone
 import threading
 import time
 from contextlib import contextmanager
@@ -1023,13 +1024,18 @@ class RepositorioSQL:
                         cur.execute(f"EXEC {sp}")
                     print(f"[guardar] EXEC {sp} ok", flush=True)
                 if control:
+                    # Hora de Lima (UTC-5, sin horario de verano), como el resto de la
+                    # app: SYSDATETIME() en Azure es UTC
+                    lima = datetime.now(timezone(timedelta(hours=-5))).replace(
+                        tzinfo=None, microsecond=0)
                     cur.execute(
                         "MERGE GUARDADOS_2027 AS t USING (SELECT %s AS P, %s AS H, %s AS O) AS s "
                         "ON t.PRESUPUESTO = s.P AND t.HOJA_ORIGEN = s.H AND t.ORIGEN = s.O "
-                        "WHEN MATCHED THEN UPDATE SET VERSION = %s, EMAIL = %s, FECHA = SYSDATETIME() "
-                        "WHEN NOT MATCHED THEN INSERT (PRESUPUESTO, HOJA_ORIGEN, ORIGEN, VERSION, EMAIL) "
-                        "VALUES (s.P, s.H, s.O, %s, %s);",
-                        [PRESUPUESTO, hoja, origen, actual + 1, email or "", actual + 1, email or ""])
+                        "WHEN MATCHED THEN UPDATE SET VERSION = %s, EMAIL = %s, FECHA = %s "
+                        "WHEN NOT MATCHED THEN INSERT (PRESUPUESTO, HOJA_ORIGEN, ORIGEN, VERSION, "
+                        "EMAIL, FECHA) VALUES (s.P, s.H, s.O, %s, %s, %s);",
+                        [PRESUPUESTO, hoja, origen, actual + 1, email or "", lima,
+                         actual + 1, email or "", lima])
                 conn.commit()
                 print("[guardar] COMMIT", flush=True)
                 return len(filas), (actual + 1 if control else None)
