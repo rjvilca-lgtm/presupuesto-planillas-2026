@@ -1,11 +1,12 @@
-# Visita la app cada 4 horas para que Streamlit Community Cloud no la duerma
-# (la duerme tras 12 h sin visitas). También se puede correr a mano desde la
-# pestaña Actions de GitHub ("Run workflow").
+# Visita la app cada hora para que Streamlit Community Cloud no la duerma (la
+# duerme tras 12 h sin visitas) y para mantener la caché de catálogos llena
+# (dura 1 hora; la pantalla de login la precarga). También se puede correr a
+# mano desde la pestaña Actions de GitHub ("Run workflow").
 name: Mantener la app despierta
 
 on:
   schedule:
-    - cron: "17 */4 * * *"   # cada 4 horas (hora UTC)
+    - cron: "17 * * * *"   # cada hora, al minuto 17
   workflow_dispatch:
 
 jobs:

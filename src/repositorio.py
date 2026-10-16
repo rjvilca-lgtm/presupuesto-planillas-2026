@@ -208,6 +208,12 @@ class RepositorioDemo:
     def ddh_disponible(self) -> bool:
         return False
 
+    def precalentar(self):
+        pass
+
+    def precalentar_en_segundo_plano(self):
+        pass
+
     def limpieza_disponible(self) -> bool:
         return False
 
@@ -301,6 +307,7 @@ def _conectar_con_timeout(server, port, database, user, password):
 # consulta a la vez (pytds no admite uso concurrente de una conexión) y se abre
 # recién cuando hace falta.
 CONEXIONES_LECTURA = 4
+_PRECALENTANDO = threading.Lock()   # un solo precalentado a la vez
 
 
 @st.cache_resource(show_spinner=False)
@@ -343,7 +350,11 @@ def _consultar(server, port, database, user, password,
         grupo.put(compartida)
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+# Catálogos y datos que cambian poco: 1 hora en memoria. Todo guardado desde la
+# app vacía esta caché (limpiar_cache), así que lo nuevo se ve al instante; lo
+# cambiado directamente en Azure tarda hasta 1 hora (o el botón de
+# Administración › Tiempos de respuesta).
+@st.cache_data(ttl=3600, show_spinner=False)
 def _leer_cacheado(server, port, database, user, password,
                    sql: str, params: tuple) -> pd.DataFrame:
     return _consultar(server, port, database, user, password, sql, params)
@@ -545,9 +556,44 @@ class RepositorioSQL:
 
     def limpiar_cache(self):
         """Tras guardar: la consulta debe ver lo recién cargado, no la copia
-        cacheada por 10 minutos."""
+        cacheada."""
         _leer_cacheado.clear()
         _leer_corto.clear()
+
+    def precalentar(self):
+        """Carga en la caché los catálogos de todos los departamentos y el
+        resumen 2026, para que el primer usuario no espere. Lo llama la
+        pantalla de login (la visita automática de cada hora pasa por ahí).
+        Solo datos no confidenciales."""
+        import time as _t
+        t0 = _t.time()
+        deptos = [d for d, _ in self.departamentos()]
+        self.todos_centros_costo()
+        for d in deptos:
+            self.centros_costo(d)
+            self.roster(d)
+            self.estructura_tc(d)
+        for hoja, cfg in PLANILLAS.items():
+            if cfg["tarifa"] == "catalogo":
+                self.tarifas(hoja)
+        self.valorizacion(2026, deptos)
+        print(f"[cache] precalentada en {_t.time() - t0:.1f}s", flush=True)
+
+    def precalentar_en_segundo_plano(self):
+        """precalentar() en un hilo aparte, uno a la vez: la pantalla de login
+        responde al instante aunque la caché tarde en llenarse."""
+        if not _PRECALENTANDO.acquire(blocking=False):
+            return
+
+        def tarea():
+            try:
+                self.precalentar()
+            except Exception as ex:
+                print(f"[cache] no se pudo precalentar: {ex!r}", flush=True)
+            finally:
+                _PRECALENTANDO.release()
+
+        threading.Thread(target=tarea, daemon=True, name="precalentar").start()
 
     def _leer_vivo(self, sql: str, params: tuple = ()) -> pd.DataFrame:
         """Datos que cambian con el trabajo de los usuarios (borradores,
@@ -932,6 +978,17 @@ class RepositorioSQL:
         if not origenes:
             return pd.DataFrame(columns=["DEPTO", "ORIGEN", "PARTIDA", "DESCRIPCION",
                                          "CENTRO_COSTO", "MES", "IMPORTE"])
+        if anio < 2027:
+            # Una sola consulta con todos los departamentos, compartida por
+            # todos los usuarios (cada uno filtra lo suyo): se paga una vez
+            sql = ("SELECT p.ORIGEN_2 AS DEPTO, p.ORIGEN, p.PARTIDA, pp.Descripcion AS "
+                   "DESCRIPCION, p.CENTRO_COSTO, p.MES, CAST(SUM(p.IMPORTE) AS float) AS IMPORTE "
+                   "FROM PLANILLA p LEFT JOIN PartidaPresupuestal pp ON pp.Codigo = p.PARTIDA "
+                   "WHERE p.AÑO = CAST(%s AS varchar(20)) "
+                   "GROUP BY p.ORIGEN_2, p.ORIGEN, p.PARTIDA, pp.Descripcion, p.CENTRO_COSTO, p.MES")
+            todo = _leer_historico(self._server, self._port, self._database, self._user,
+                                   self._password, sql, (str(anio),))
+            return todo[todo["DEPTO"].isin(origenes)].reset_index(drop=True)
         marcas = ", ".join(["%s"] * len(origenes))
         sql = ("SELECT p.ORIGEN_2 AS DEPTO, p.ORIGEN, p.PARTIDA, pp.Descripcion AS DESCRIPCION, "
                "p.CENTRO_COSTO, p.MES, CAST(SUM(p.IMPORTE) AS float) AS IMPORTE "
@@ -940,9 +997,6 @@ class RepositorioSQL:
                # (con un número SQL convierte toda la columna y la recorre entera)
                f"WHERE p.AÑO = CAST(%s AS varchar(20)) AND p.ORIGEN_2 IN ({marcas}) "
                "GROUP BY p.ORIGEN_2, p.ORIGEN, p.PARTIDA, pp.Descripcion, p.CENTRO_COSTO, p.MES")
-        if anio < 2027:
-            return _leer_historico(self._server, self._port, self._database, self._user,
-                                   self._password, sql, (str(anio), *origenes))
         return self._leer_vivo(sql, (str(anio), *origenes))
 
     def permisos_usuario(self, email: str) -> pd.DataFrame:

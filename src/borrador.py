@@ -22,7 +22,9 @@ import time
 import pandas as pd
 import streamlit as st
 
-AUTOGUARDADO_SEG = 120
+# Con un corte de red largo Streamlit puede perder la sesión: así se pierde como
+# máximo un minuto de trabajo
+AUTOGUARDADO_SEG = 60
 
 
 def firma(df: pd.DataFrame, ids: list[str], valores: list[str]) -> str:
@@ -152,8 +154,8 @@ def indicador(clave: str, hay_cambios: bool, solo_lectura: bool = False) -> str:
         if st.session_state.get(_k(clave, "error")):
             return ("⚠️ Cambios sin guardar · el guardado automático se detuvo por "
                     "observaciones: pulsa Guardar para verlas")
-        return ("● Cambios sin guardar · se guardan solos cada "
-                f"{AUTOGUARDADO_SEG // 60} min mientras editas, o pulsa Guardar")
+        return ("● Cambios sin guardar · se guardan solos cada minuto mientras "
+                "editas, o pulsa Guardar")
     hora = st.session_state.get(_k(clave, "hora"))
     return f"✓ Todo guardado{' (' + hora + ')' if hora else ''}"
 

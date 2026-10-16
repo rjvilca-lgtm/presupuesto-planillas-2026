@@ -12,12 +12,15 @@ se quiera; el departamento valoriza todo junto desde "Resumen y valorización".
     streamlit run app.py
 """
 
+import time
+
 import streamlit as st
 
 from src.auth import barra_usuario, exigir_login
 from src import borrador
 from src.borrador import (aviso_al_salir, autoguardar, firma, marcar_guardado,
                           mostrar_indicador, indicador, pendiente, toca_autoguardar)
+from src.diagnostico import registrar, vista_diagnostico
 from src.carga_academica import consulta_carga_academica, registro_carga_academica
 from src.config import MESES, cfg_de, dims_fila
 from src.flujo import (aviso_departamento, leer_flujo, marcar, ahora, panel_flujo,
@@ -31,12 +34,23 @@ from src.vistas import (TC_HOJAS, ficha_docente, grilla, hero,
 
 
 def main():
+    """Mide cuánto tarda el servidor en cada ejecución (ver src/diagnostico.py)."""
+    t0 = time.perf_counter()
+    contexto = {"pantalla": "Login", "email": "—"}
+    try:
+        _main(contexto)
+    finally:
+        registrar(contexto["pantalla"], contexto["email"], time.perf_counter() - t0)
+
+
+def _main(contexto):
     st.set_page_config(page_title="Presupuesto de planillas 2026",
                        page_icon="📋", layout="wide")
     inyectar_estilos()
 
     repo = crear_repositorio()
     usuario = exigir_login(repo)
+    contexto["email"] = usuario.email
     fl = leer_flujo(repo)
 
     barra_usuario(usuario)
@@ -62,14 +76,19 @@ def main():
                      lambda: vista_reporte(repo, fl, usuario, repo.departamentos())))
     if usuario.presupuesto:
         pestañas.append(("Presupuesto · administración",
-                         lambda: vista_admin(repo, fl, repo.departamentos(), usuario)))
+                         lambda: (vista_admin(repo, fl, repo.departamentos(), usuario),
+                                  st.divider(), vista_diagnostico(repo))))
     # Solo se ejecuta la pestaña abierta: las demás no consultan la base ni
     # dibujan nada hasta que se abren (lo editado y no guardado sigue en la sesión)
     tabs = st.tabs([t for t, _ in pestañas], on_change="rerun", key="nav_principal")
-    for tab, (_, vista) in zip(tabs, pestañas):
+    for tab, (titulo, vista) in zip(tabs, pestañas):
         if tab.open:
+            contexto["pantalla"] = titulo
+            st.session_state.pop("_pantalla_detalle", None)
             with tab:
                 vista()
+            if st.session_state.get("_pantalla_detalle"):
+                contexto["pantalla"] = f"{titulo} › {st.session_state['_pantalla_detalle']}"
     aviso_al_salir()
 
 
@@ -77,6 +96,7 @@ def vista_departamentos(repo, fl, usuario):
     # Presupuesto ve todos los departamentos; los demás, solo los suyos
     permitidos = None if usuario.presupuesto else usuario.departamentos
     origen, seleccion = selector_contexto(repo, permitidos)
+    st.session_state["_pantalla_detalle"] = f"{origen} · {seleccion}"
     panel_flujo(fl)
     solo_lectura = aviso_departamento(fl, origen)
 

@@ -109,6 +109,9 @@ def exigir_login(repo) -> Usuario:
     identidad = _identidad()
     if not identidad:
         pantalla_login()
+        # En segundo plano se llena la caché para que el primero en entrar no
+        # espere (la visita automática de cada hora pasa por aquí)
+        repo.precalentar_en_segundo_plano()
         st.stop()
     email, nombre = identidad
     email = email.strip().lower()

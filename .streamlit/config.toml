@@ -11,3 +11,6 @@ maxUploadSize = 5
 # Sin vigilar archivos: en Streamlit Cloud llenaba los logs con
 # "inotify instance limit reached" (el código cambia solo al hacer push)
 fileWatcherType = "none"
+# Comprime lo que el servidor envía al navegador (tablas, pantallas): ayuda
+# mucho con internet lento, a cambio de un poco de trabajo del servidor
+enableWebsocketCompression = true
