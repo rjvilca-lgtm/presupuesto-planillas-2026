@@ -192,6 +192,9 @@ class RepositorioDemo:
     def parametros(self):
         return None
 
+    def ddh_disponible(self) -> bool:
+        return False
+
     def permisos_usuario(self, email: str) -> pd.DataFrame:
         filas = [u for u in self._usuarios if u["EMAIL"] == email and u.get("ACTIVO", True)]
         return pd.DataFrame(filas, columns=["ROL", "DEPARTAMENTO"])
@@ -699,6 +702,67 @@ class RepositorioSQL:
     def auditoria_dh(self) -> pd.DataFrame:
         return self._leer_vivo("SELECT TOP 200 FECHA, EMAIL, TABLA, DNI, ACCION, DETALLE "
                                "FROM AUDITORIA_DESARROLLO_HUMANO ORDER BY ID DESC")
+
+    # ------------------------------------------------ Valorización DDH 2027
+
+    def ddh_disponible(self) -> bool:
+        df = self._leer_vivo("SELECT OBJECT_ID('dbo.sp_Importar_DDH_2027', 'P') AS ID")
+        return df["ID"].iloc[0] is not None
+
+    def dimensiones_ddh(self) -> pd.DataFrame:
+        """Dimensiones de remuneraciones (20 Docencia, 22 Administrativa, ...),
+        sin la cabecera 01.00, más las que DDH ya usó en PLANILLA aunque no estén
+        en DIMENSIONES (la 33, en las partidas 013 y 014)."""
+        return self._leer(
+            "SELECT CODIGO_INTERNO AS CODIGO, DESCRIPCION FROM DIMENSIONES "
+            "WHERE RIGHT(DIMENSION_CONTABLE, 3) <> '.00' "
+            "UNION SELECT DISTINCT DIMENSION, "
+            "N'Usada por DDH en 2025-2026 (no está en la tabla DIMENSIONES)' FROM PLANILLA "
+            "WHERE ORIGEN_2 = 'DDH' AND AÑO IN ('2025', '2026') AND DIMENSION IS NOT NULL "
+            "AND DIMENSION NOT IN (SELECT CODIGO_INTERNO FROM DIMENSIONES) "
+            "ORDER BY CODIGO")
+
+    def partidas(self) -> set:
+        return set(self._leer("SELECT Codigo FROM PartidaPresupuestal")["Codigo"].astype(str))
+
+    def equivalencia_cecos(self) -> dict:
+        df = self._leer("SELECT CODIGO_ANTIGUO, CODIGO_NUEVO FROM EQUIVALENCIA_CECOS")
+        return dict(zip(df["CODIGO_ANTIGUO"], df["CODIGO_NUEVO"]))
+
+    def totales_ddh(self) -> pd.DataFrame:
+        """Filas e importe total de DDH por año (2026 y 2027), solo agregados."""
+        return self._leer_vivo(
+            "SELECT AÑO AS ANIO, COUNT(*) AS FILAS, CAST(SUM(IMPORTE) AS float) AS TOTAL "
+            "FROM PLANILLA WHERE ORIGEN_2 = 'DDH' AND AÑO IN ('2026', '2027') GROUP BY AÑO")
+
+    def importar_ddh(self, df: pd.DataFrame, email: str) -> int:
+        """Deja las filas en CARGA_DDH_2027 y sp_Importar_DDH_2027 reemplaza la
+        valorización DDH 2027 en PLANILLA, todo en una transacción. Va con la
+        cuenta de Desarrollo Humano ([sql_rrhh]) si está configurada.
+        Inserta en lotes de 300 filas (6 parámetros por fila; SQL Server
+        admite hasta 2100 por sentencia): fila por fila serían miles de idas y
+        vueltas a la base."""
+        cols = ["CENTRO_COSTO", "PARTIDA", "DIMENSION", "MES", "IMPORTE", "CONCEPTO"]
+        filas = [[r.CENTRO_COSTO, r.PARTIDA, r.DIMENSION, int(r.MES), float(r.IMPORTE),
+                  r.CONCEPTO or None] for r in df[cols].itertuples(index=False)]
+        marcas = "(" + ", ".join(["%s"] * len(cols)) + ")"
+
+        def trabajo(cur):
+            cur.execute("DECLARE @r int; EXEC @r = sp_getapplock @Resource = 'IMPORTAR_DDH', "
+                        "@LockMode = 'Exclusive', @LockOwner = 'Transaction', "
+                        "@LockTimeout = 30000; IF @r < 0 THROW 50033, "
+                        "'Otra importación de DDH en curso; intenta de nuevo.', 1;")
+            cur.execute("DELETE FROM CARGA_DDH_2027")
+            for i in range(0, len(filas), 300):
+                lote = filas[i:i + 300]
+                cur.execute(f"INSERT INTO CARGA_DDH_2027 ({', '.join(cols)}) VALUES "
+                            + ", ".join([marcas] * len(lote)),
+                            [v for fila in lote for v in fila])
+            cur.execute("EXEC sp_Importar_DDH_2027 @Email = %s", [email])
+
+        print(f"[ddh] importando {len(filas)} fila(s)", flush=True)
+        self._transaccion(self._conn_rrhh(), trabajo)
+        return len(filas)
 
     # ------------------------------------------------ Parámetros 2027
 

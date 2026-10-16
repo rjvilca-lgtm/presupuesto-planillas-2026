@@ -3,7 +3,7 @@ Resumen de valorización: los montos que dejaron los procedimientos en PLANILLA.
 
 Muestra 2027 (lo valorizado con la app) y lo compara con 2026 en el mismo
 alcance. Cada usuario ve solo lo suyo: Presupuesto todo, un departamento lo
-suyo, la DGA la carga académica.
+suyo, la DGA la carga académica y Desarrollo Humano su valorización (DDH).
 """
 
 import pandas as pd
@@ -22,7 +22,9 @@ PLANILLA = {
     "Investigacion": "Investigación",
     "Ayudantias": "Ayudantías",
     "Carga Academica": "Carga académica",
+    "Desarrollo Humano": "Valorización DDH",
 }
+DDH = "DDH"   # PLANILLA.ORIGEN_2 de la valorización que importa Desarrollo Humano
 MESES_CORTOS = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct",
                 "Nov", "Dic"]
 SOLES = st.column_config.NumberColumn(format="localized")
@@ -30,13 +32,16 @@ SOLES = st.column_config.NumberColumn(format="localized")
 
 def _alcance(usuario, deptos) -> list[str]:
     if usuario.presupuesto:
-        return [d for d, _ in deptos] + [DGA]
-    return list(usuario.departamentos) + ([DGA] if usuario.dga else [])
+        return [d for d, _ in deptos] + [DGA, DDH]
+    return (list(usuario.departamentos) + ([DGA] if usuario.dga else [])
+            + ([DDH] if usuario.rrhh else []))
 
 
 def _preparar(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["IMPORTE"] = pd.to_numeric(df["IMPORTE"], errors="coerce").fillna(0.0)
+    # Hasta 2026 la macro de DDH dejaba ORIGEN vacío
+    df.loc[df["DEPTO"].eq(DDH) & df["ORIGEN"].isna(), "ORIGEN"] = "Desarrollo Humano"
     df["PLANILLA"] = df["ORIGEN"].map(PLANILLA).fillna(df["ORIGEN"])
     df["MES"] = pd.to_numeric(df["MES"], errors="coerce")
     df["PARTIDA_DESC"] = (df["PARTIDA"] + " · " + df["DESCRIPCION"].fillna("")).str.strip(" ·")
@@ -52,7 +57,7 @@ def vista_reporte(repo, fl, usuario, deptos):
     st.caption("Montos valorizados (PLANILLA) en soles. 2027 incluye solo lo que ya se "
                "valorizó con la app; 2026 es la referencia en el mismo alcance.")
     alcance = _alcance(usuario, deptos)
-    nombres = {**dict(deptos), DGA: "Carga académica (DGA)"}
+    nombres = {**dict(deptos), DGA: "Carga académica (DGA)", DDH: "Desarrollo Humano"}
     d27 = _preparar(repo.valorizacion(2027, alcance))
     d26 = _preparar(repo.valorizacion(2026, alcance))
 

@@ -55,6 +55,7 @@ GRANT SELECT ON dbo.CECOS_DEPARTAMENTO_2027 TO rol_app_planillas;
 GRANT SELECT ON dbo.EQUIVALENCIA_CECOS      TO rol_app_planillas;
 GRANT SELECT ON dbo.CECO_CONCEPTO_TC        TO rol_app_planillas;
 GRANT SELECT ON dbo.PartidaPresupuestal     TO rol_app_planillas;
+GRANT SELECT ON dbo.DIMENSIONES             TO rol_app_planillas;
 GRANT SELECT ON dbo.PLANILLA                TO rol_app_planillas;
 
 -- Lo que la app escribe
@@ -87,6 +88,11 @@ GO
 
 -- 4. Salarios 2027: solo la cuenta de Desarrollo Humano
 GRANT SELECT, INSERT, DELETE ON dbo.Remuneraciones_2027 TO rol_app_planillas_rrhh;
+-- Valorización DDH 2027 (sql/crear_carga_ddh_2027.sql), si ya existe
+IF OBJECT_ID('dbo.CARGA_DDH_2027', 'U') IS NOT NULL
+    GRANT INSERT, DELETE ON dbo.CARGA_DDH_2027 TO rol_app_planillas_rrhh;
+IF OBJECT_ID('dbo.sp_Importar_DDH_2027', 'P') IS NOT NULL
+    GRANT EXECUTE ON dbo.sp_Importar_DDH_2027 TO rol_app_planillas_rrhh;
 GO
 
 -- Verificación: permisos efectivos de cada rol

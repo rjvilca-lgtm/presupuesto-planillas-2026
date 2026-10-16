@@ -2,7 +2,8 @@
 Desarrollo Humano: padrón de docentes TC, sus horas, salarios 2027 y tarifas.
 
 Docentes, horas y salarios se actualizan SOLO importando la plantilla única
-(src/plantillas.py), una fila por persona. La pantalla no muestra datos: solo
+(src/plantillas.py), una fila por persona. La valorización DDH 2027 se importa
+con su propia plantilla (src/carga_ddh.py). La pantalla no muestra datos: solo
 valida el archivo e informa errores, inconsistencias (por número de fila y DNI)
 y conteos de altas, bajas y cambios. Las tarifas (4 valores) se editan aquí.
 
@@ -17,6 +18,7 @@ en los secrets para una cuenta de base de datos propia para salarios.
 import pandas as pd
 import streamlit as st
 
+from . import carga_ddh
 from .plantillas import contar_movimientos, filas_txt, leer, plantilla, unificar_dni
 from .repositorio import COLS_REMUNERACION
 
@@ -24,11 +26,15 @@ XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def vista_desarrollo_humano(repo, usuario, deptos):
-    t_imp, t_tar, t_aud = st.tabs(["Importar docentes y salarios", "Tarifas",
-                                   "Registro de cambios"], on_change="rerun", key="tabs_rrhh")
+    t_imp, t_ddh, t_tar, t_aud = st.tabs(["Importar docentes y salarios", "Valorización DDH",
+                                          "Tarifas", "Registro de cambios"],
+                                         on_change="rerun", key="tabs_rrhh")
     if t_imp.open:
         with t_imp:
             _importar(repo, usuario, deptos)
+    if t_ddh.open:
+        with t_ddh:
+            _valorizacion_ddh(repo, usuario)
     if t_tar.open:
         with t_tar:
             _tarifas(repo, usuario)
@@ -167,6 +173,88 @@ def _importar(repo, usuario, deptos):
                           f"{type(ex).__name__}")
         st.session_state["_res_importar"] = res
         st.session_state["_ver_rrhh"] = st.session_state.get("_ver_rrhh", 0) + 1
+        st.rerun()
+
+
+# ---------------------------------------------------------- valorización DDH
+
+def _valorizacion_ddh(repo, usuario):
+    st.caption("Valorización de Desarrollo Humano 2027 (planilla administrativa y demás "
+               "conceptos de DH) por centro de costo, partida, dimensión y mes. Reemplaza "
+               "la macro «Subir datos DDH»: mismas columnas. Cada importación reemplaza la "
+               "anterior. Esta pantalla no muestra las filas: solo errores y totales.")
+    _mostrar_resultado("_res_ddh")
+    if not repo.ddh_disponible():
+        st.warning("Falta preparar la base: ejecuta `sql/crear_carga_ddh_2027.sql` en Azure.",
+                   icon="⚠️")
+        return
+
+    totales = repo.totales_ddh().set_index("ANIO")
+    m = st.columns(2)
+    for col, anio in zip(m, ("2027", "2026")):
+        if anio in totales.index:
+            col.metric(f"DDH {anio} en PLANILLA", f"S/ {totales.at[anio, 'TOTAL']:,.2f}",
+                       help=f"{int(totales.at[anio, 'FILAS']):,} filas")
+        else:
+            col.metric(f"DDH {anio} en PLANILLA", "Sin datos")
+
+    dimensiones = repo.dimensiones_ddh()
+    c1, c2 = st.columns([1, 2], vertical_alignment="bottom")
+    c1.download_button("⬇ Descargar plantilla en blanco", carga_ddh.plantilla(dimensiones),
+                       file_name="valorizacion_ddh_2027.xlsx", mime=XLSX, width="stretch")
+    archivo = c2.file_uploader("Subir el Excel de la valorización DDH", type=["xlsx", "xlsm"],
+                               key=f"up_ddh_{st.session_state.get('_ver_ddh', 0)}")
+    if archivo is None:
+        return
+
+    cecos = set(repo.todos_centros_costo()["CODIGO_CECO"])
+    datos, errores, avisos = carga_ddh.leer(
+        archivo, cecos, repo.equivalencia_cecos(), set(dimensiones["CODIGO"].astype(str)),
+        repo.partidas())
+    for a in avisos:
+        st.warning(a, icon="⚠️")
+    if errores:
+        st.error("El archivo tiene errores. Corrígelos en el Excel y vuelve a subirlo:",
+                 icon="⚠️")
+        for e in errores:
+            st.markdown(f"- {e}")
+        return
+
+    st.subheader("Verificación del archivo")
+    m = st.columns(4)
+    m[0].metric("Filas", f"{len(datos):,}")
+    m[1].metric("Centros de costo", datos["CENTRO_COSTO"].nunique())
+    m[2].metric("Partidas", datos["PARTIDA"].nunique())
+    m[3].metric("Total", f"S/ {datos['IMPORTE'].sum():,.2f}")
+    por_mes = datos.groupby("MES")["IMPORTE"].sum().reindex(range(1, 13), fill_value=0.0)
+    st.caption("Total por mes (S/)")
+    st.dataframe(pd.DataFrame([por_mes.values], columns=[
+        "Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "Oct", "Nov", "Dic"]),
+        hide_index=True, width="stretch",
+        column_config={c: st.column_config.NumberColumn(format="localized")
+                       for c in ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago",
+                                 "Set", "Oct", "Nov", "Dic"]})
+
+    reemplaza = "2027" in totales.index
+    acepta = True
+    if reemplaza:
+        acepta = st.checkbox(
+            f"Confirmo que reemplaza la valorización DDH 2027 actual "
+            f"({int(totales.at['2027', 'FILAS']):,} filas, S/ {totales.at['2027', 'TOTAL']:,.2f}).",
+            key="conf_ddh")
+    if st.button("Importar valorización DDH", type="primary", disabled=not acepta,
+                 key="btn_importar_ddh"):
+        with st.spinner("Importando…"):
+            try:
+                n = repo.importar_ddh(datos, usuario.email)
+                res = (True, f"Valorización DDH 2027 importada: {n:,} filas, "
+                             f"S/ {datos['IMPORTE'].sum():,.2f}. Recuerda borrar el archivo "
+                             "de tu equipo.")
+            except Exception as ex:
+                res = (False, "No se importó nada; se revirtió la operación. Detalle: "
+                              f"{type(ex).__name__}: {str(ex)[:200]}")
+        st.session_state["_res_ddh"] = res
+        st.session_state["_ver_ddh"] = st.session_state.get("_ver_ddh", 0) + 1
         st.rerun()
 
 
