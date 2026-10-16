@@ -9,6 +9,11 @@ el navegador pide confirmación antes de cerrar o recargar la página.
 Guardado automático: si hay cambios sin guardar desde hace AUTOGUARDADO_SEG,
 en la siguiente edición se guarda el borrador solo (si pasa las validaciones
 de guardado). Es seguro porque guardar no valoriza.
+
+Guardados simultáneos: al abrir una planilla se anota su versión guardada
+(GUARDADOS_2027). Si otra persona la guarda mientras tanto, el guardado de
+esta sesión se rechaza (ConflictoGuardado): se avisa quién y cuándo, se
+detiene el guardado automático y se ofrece recargar la planilla.
 """
 
 import hashlib
@@ -70,8 +75,57 @@ def olvidar(clave: str):
 
 
 def toca_autoguardar(clave: str) -> bool:
+    if st.session_state.get(_k(clave, "conflicto")):
+        return False
     desde = st.session_state.get(_k(clave, "desde"))
     return desde is not None and time.time() - desde >= AUTOGUARDADO_SEG
+
+
+# ----------------------------------------------------- guardados simultáneos
+
+def registrar_version(repo, hoja: str, origen: str):
+    """Anota la versión guardada al abrir la planilla (una vez por sesión)."""
+    clave = f"{hoja}|{origen}"
+    if _k(clave, "version") not in st.session_state:
+        st.session_state[_k(clave, "version")] = repo.version_planilla(hoja, origen)
+
+
+def version(hoja: str, origen: str):
+    return st.session_state.get(_k(f"{hoja}|{origen}", "version"))
+
+
+def fijar_version(hoja: str, origen: str, valor):
+    st.session_state[_k(f"{hoja}|{origen}", "version")] = valor
+
+
+def hay_conflicto(hoja: str, origen: str) -> bool:
+    return bool(st.session_state.get(_k(f"{hoja}|{origen}", "conflicto")))
+
+
+def marcar_conflicto(hoja: str, origen: str, mensaje: str):
+    st.session_state[_k(f"{hoja}|{origen}", "conflicto")] = mensaje
+
+
+def mostrar_conflicto(hoja: str, origen: str, claves_estado: list[str],
+                      prefijos_estado: tuple = ()) -> bool:
+    """Si hubo conflicto, lo muestra con el botón para recargar desde la base.
+    claves_estado / prefijos_estado: lo que la pantalla guarda en la sesión
+    para esa planilla (se borra al recargar)."""
+    clave = f"{hoja}|{origen}"
+    mensaje = st.session_state.get(_k(clave, "conflicto"))
+    if not mensaje:
+        return False
+    st.error(mensaje, icon="👥")
+    if st.button("Recargar la planilla con lo último guardado", type="primary",
+                 key=f"btn_recargar_{clave}"):
+        for k in list(st.session_state.keys()):
+            if k in claves_estado or (prefijos_estado and str(k).startswith(prefijos_estado)):
+                del st.session_state[k]
+        for que in ("version", "conflicto", "error"):
+            st.session_state.pop(_k(clave, que), None)
+        olvidar(clave)
+        st.rerun()
+    return True
 
 
 def autoguardar(clave: str, firma_actual: str, errores: list[str], guardar) -> None:

@@ -14,6 +14,7 @@ La interfaz es idéntica, así que la interfaz de usuario no distingue el modo.
 from __future__ import annotations
 
 import concurrent.futures
+import queue
 import threading
 import time
 from contextlib import contextmanager
@@ -106,6 +107,14 @@ _CECO_CONCEPTOS_DEMO = {
 }
 
 
+class ConflictoGuardado(Exception):
+    """Otra persona guardó la planilla después de que esta sesión la abrió."""
+
+    def __init__(self, email, fecha):
+        self.email, self.fecha = email, fecha
+        super().__init__(f"{email} guardó esta planilla el {fecha}")
+
+
 class RepositorioDemo:
     """Todo en memoria. No escribe en ninguna base."""
 
@@ -160,10 +169,13 @@ class RepositorioDemo:
     _estados: dict = {}
     _fecha_bloqueo = None
 
-    def guardar_borrador(self, hoja, origen, filas, cols) -> int:
+    def guardar_borrador(self, hoja, origen, filas, cols, email=None, version=None):
         df = pd.DataFrame(filas, columns=cols)
         self._entrada[(hoja, origen)] = df.reindex(columns=COLS_ENTRADA).assign(HOJA_ORIGEN=hoja)
-        return len(filas)
+        return len(filas), None
+
+    def version_planilla(self, hoja, origen):
+        return None
 
     def entrada(self, origen: str) -> pd.DataFrame:
         partes = [df for (h, o), df in self._entrada.items() if o == origen]
@@ -280,19 +292,30 @@ def _conectar_con_timeout(server, port, database, user, password):
 # Los catálogos casi no cambian durante una sesión y Streamlit re-ejecuta el
 # script en cada interacción: sin caché, cada tecla abriría varias conexiones
 # TLS nuevas a Azure. Se cachean por 10 minutos (por consulta + parámetros).
+# Conexiones de lectura compartidas por todas las sesiones. Abrir una conexión
+# TLS a Azure cuesta ~0.7 s (más desde Streamlit Cloud): con una por consulta,
+# la primera carga de la página tardaba 15-20 s. Con una sola compartida, una
+# consulta lenta (el resumen 2026 tarda ~12 s sin caché) congelaba a todos los
+# usuarios; con varias, los demás siguen trabajando. Cada conexión la usa una
+# consulta a la vez (pytds no admite uso concurrente de una conexión) y se abre
+# recién cuando hace falta.
+CONEXIONES_LECTURA = 4
+
+
 @st.cache_resource(show_spinner=False)
 def _conexion_lectura(server, port, database, user):
-    """Una conexión de lectura compartida por todas las sesiones. Abrir una
-    conexión TLS a Azure cuesta ~0.7 s (más desde Streamlit Cloud): con una
-    por consulta, la primera carga de la página tardaba 15-20 s. El lock
-    serializa las lecturas (pytds no admite uso concurrente de una conexión)."""
-    return {"conn": None, "lock": threading.Lock()}
+    """Grupo de CONEXIONES_LECTURA espacios; cada uno guarda su conexión."""
+    grupo = queue.Queue()
+    for _ in range(CONEXIONES_LECTURA):
+        grupo.put({"conn": None})
+    return grupo
 
 
 def _consultar(server, port, database, user, password,
                sql: str, params: tuple) -> pd.DataFrame:
-    compartida = _conexion_lectura(server, port, database, user)
-    with compartida["lock"]:
+    grupo = _conexion_lectura(server, port, database, user)
+    compartida = grupo.get()          # espera si las 4 están ocupadas
+    try:
         for intento in (1, 2):
             if compartida["conn"] is None:
                 compartida["conn"] = _conectar_con_timeout(server, port, database,
@@ -315,6 +338,8 @@ def _consultar(server, port, database, user, password,
                 compartida["conn"] = None
                 if intento == 2:
                     raise
+    finally:
+        grupo.put(compartida)
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -541,11 +566,29 @@ class RepositorioSQL:
         return df
 
     def guardar_borrador(self, hoja: str, origen: str, filas: list[list],
-                         cols: list[str]) -> int:
-        """Reemplaza lo guardado de la planilla sin valorizar."""
-        n = self.guardar(hoja, origen, filas, cols, [])
+                         cols: list[str], email: str | None = None,
+                         version: int | None = None) -> tuple[int, int | None]:
+        """Reemplaza lo guardado de la planilla sin valorizar. version: la que
+        esta sesión vio al abrir la planilla (version_planilla); si alguien
+        guardó después, lanza ConflictoGuardado y no guarda nada.
+        Devuelve (filas guardadas, nueva versión)."""
+        n, nueva = self.guardar(hoja, origen, filas, cols, [], email=email, version=version)
         self.limpiar_cache()
-        return n
+        return n, nueva
+
+    def _control_versiones(self) -> bool:
+        """¿Existe GUARDADOS_2027 (sql/crear_guardados_2027.sql)? Sin ella se
+        guarda sin detectar conflictos, como antes."""
+        df = self._leer("SELECT OBJECT_ID('dbo.GUARDADOS_2027', 'U') AS ID")
+        return df["ID"].iloc[0] is not None
+
+    def version_planilla(self, hoja: str, origen: str) -> int | None:
+        """Versión guardada de la planilla (0 si nunca se guardó; None sin control)."""
+        if not self._control_versiones():
+            return None
+        df = self._leer_vivo("SELECT VERSION FROM GUARDADOS_2027 WHERE PRESUPUESTO = %s "
+                             "AND HOJA_ORIGEN = %s AND ORIGEN = %s", (PRESUPUESTO, hoja, origen))
+        return int(df["VERSION"].iloc[0]) if not df.empty else 0
 
     def valorizar(self, origen: str, sps: list[tuple]) -> None:
         """Ejecuta los sp en una sola transacción: si uno falla, ninguno queda."""
@@ -930,10 +973,16 @@ class RepositorioSQL:
             "WHERE PRESUPUESTO = %s", [fecha, PRESUPUESTO])
 
     def guardar(self, hoja: str, origen: str, filas: list[list], cols: list[str],
-                sps: list[tuple]) -> int:
+                sps: list[tuple], email: str | None = None,
+                version: int | None = None) -> tuple[int, int | None]:
         """DELETE + INSERT parametrizado + EXEC, en una sola transacción.
         El DELETE solo alcanza las filas del PRESUPUESTO de la app.
-        Si algo falla, rollback: nunca quedan datos borrados a medio cargar."""
+        Si algo falla, rollback: nunca quedan datos borrados a medio cargar.
+        Con GUARDADOS_2027: si la versión guardada no es la que vio esta sesión
+        (otra persona guardó mientras tanto), no guarda y lanza
+        ConflictoGuardado; si guarda, sube la versión y anota quién.
+        Devuelve (filas, nueva versión o None)."""
+        control = self._control_versiones()
         placeholders = ", ".join(["%s"] * len(cols))
         sql_insert = f"INSERT INTO DATOS_ENTRADA ({', '.join(cols)}) VALUES ({placeholders})"
         sql_delete = ("DELETE FROM DATOS_ENTRADA "
@@ -954,6 +1003,15 @@ class RepositorioSQL:
                     "@LockTimeout = 30000; IF @r < 0 THROW 50020, "
                     "'Otro guardado de esta planilla está en curso; intenta de nuevo.', 1;",
                     [f"DATOS_ENTRADA|{PRESUPUESTO}|{hoja}|{origen}"])
+                actual = None
+                if control:
+                    cur.execute("SELECT VERSION, EMAIL, FECHA FROM GUARDADOS_2027 "
+                                "WHERE PRESUPUESTO = %s AND HOJA_ORIGEN = %s AND ORIGEN = %s",
+                                [PRESUPUESTO, hoja, origen])
+                    fila = cur.fetchone()
+                    actual = int(fila[0]) if fila else 0
+                    if version is not None and actual != version:
+                        raise ConflictoGuardado(fila[1], fila[2])
                 cur.execute(sql_delete, [hoja, origen, PRESUPUESTO])
                 print(f"[guardar] DELETE previo: {cur.rowcount} fila(s)", flush=True)
                 cur.executemany(sql_insert, filas)
@@ -964,9 +1022,17 @@ class RepositorioSQL:
                     else:
                         cur.execute(f"EXEC {sp}")
                     print(f"[guardar] EXEC {sp} ok", flush=True)
+                if control:
+                    cur.execute(
+                        "MERGE GUARDADOS_2027 AS t USING (SELECT %s AS P, %s AS H, %s AS O) AS s "
+                        "ON t.PRESUPUESTO = s.P AND t.HOJA_ORIGEN = s.H AND t.ORIGEN = s.O "
+                        "WHEN MATCHED THEN UPDATE SET VERSION = %s, EMAIL = %s, FECHA = SYSDATETIME() "
+                        "WHEN NOT MATCHED THEN INSERT (PRESUPUESTO, HOJA_ORIGEN, ORIGEN, VERSION, EMAIL) "
+                        "VALUES (s.P, s.H, s.O, %s, %s);",
+                        [PRESUPUESTO, hoja, origen, actual + 1, email or "", actual + 1, email or ""])
                 conn.commit()
                 print("[guardar] COMMIT", flush=True)
-                return len(filas)
+                return len(filas), (actual + 1 if control else None)
             except Exception as e:
                 conn.rollback()
                 print(f"[guardar] ROLLBACK por error: {e!r}", flush=True)

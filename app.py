@@ -15,6 +15,7 @@ se quiera; el departamento valoriza todo junto desde "Resumen y valorización".
 import streamlit as st
 
 from src.auth import barra_usuario, exigir_login
+from src import borrador
 from src.borrador import (aviso_al_salir, autoguardar, firma, marcar_guardado,
                           mostrar_indicador, indicador, pendiente, toca_autoguardar)
 from src.carga_academica import consulta_carga_academica, registro_carga_academica
@@ -23,7 +24,7 @@ from src.flujo import (aviso_departamento, leer_flujo, marcar, ahora, panel_fluj
                        vista_admin, vista_resumen)
 from src.reporte import vista_reporte
 from src.rrhh import vista_desarrollo_humano
-from src.repositorio import crear_repositorio, preparar_filas
+from src.repositorio import ConflictoGuardado, crear_repositorio, preparar_filas
 from src.validacion import conteo, estimar_importe, total_horas, validar
 from src.vistas import (TC_HOJAS, ficha_docente, grilla, hero,
                         inyectar_estilos, selector_contexto)
@@ -52,7 +53,7 @@ def main():
                          lambda: vista_departamentos(repo, fl, usuario)))
     if usuario.presupuesto or usuario.dga:
         pestañas.append(("Carga académica · registro (DGA)",
-                         lambda: registro_carga_academica(repo, fl)))
+                         lambda: registro_carga_academica(repo, fl, usuario)))
     if usuario.rrhh:
         pestañas.append(("Desarrollo Humano",
                          lambda: vista_desarrollo_humano(repo, usuario, repo.departamentos())))
@@ -101,17 +102,20 @@ def vista_departamentos(repo, fl, usuario):
         for hoja, tab in zip(TC_HOJAS, pestañas):
             if not tab.open:
                 continue
+            borrador.registrar_version(repo, hoja, origen)
             with tab:
                 _renderizar_ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen,
-                                     entrada[entrada["HOJA_ORIGEN"] == hoja], solo_lectura)
+                                     entrada[entrada["HOJA_ORIGEN"] == hoja], solo_lectura,
+                                     usuario)
         return
 
     cfg = cfg_de(seleccion)
     st.caption(cfg["ayuda"])
     roster = repo.roster(origen) if cfg["usa_roster"] else roster_vacio()
     tarifas = repo.tarifas(seleccion) if cfg["tarifa"] == "catalogo" else {}
+    borrador.registrar_version(repo, seleccion, origen)
     _renderizar_grilla(repo, fl, seleccion, cfg, ccos, roster, tarifas, origen,
-                       entrada[entrada["HOJA_ORIGEN"] == seleccion], solo_lectura)
+                       entrada[entrada["HOJA_ORIGEN"] == seleccion], solo_lectura, usuario)
 
 
 def _mostrar_resultado(hoja):
@@ -122,10 +126,12 @@ def _mostrar_resultado(hoja):
 
 
 def _renderizar_ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guardado,
-                         solo_lectura):
+                         solo_lectura, usuario):
     """Ficha TC (maestro-detalle) con guardado de borrador en la barra fija."""
     cfg = cfg_de(hoja)
     _mostrar_resultado(hoja)
+    estado_ficha = f"_ficha_{hoja}_{origen}"   # ver vistas.ficha_docente
+    borrador.mostrar_conflicto(hoja, origen, [estado_ficha], (f"h_{estado_ficha}_",))
     editado = ficha_docente(cfg, ccos, estructura, roster, origen, guardado, solo_lectura)
 
     # La estructura TC puede traer CECOs de otros departamentos (docentes
@@ -144,7 +150,7 @@ def _renderizar_ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guard
 
     if hay_cambios and not solo_lectura and toca_autoguardar(clave):
         autoguardar(clave, f_actual, _errores(),
-                    lambda: guardar_borrador(repo, hoja, origen, editado))
+                    lambda: guardar_borrador(repo, hoja, origen, editado, usuario.email))
         hay_cambios = pendiente(clave, f_actual)
     st.markdown('<div style="height:60px"></div>', unsafe_allow_html=True)
     with st.container(key=f"barra_guardar_{hoja}"):
@@ -167,12 +173,12 @@ def _renderizar_ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guard
             _dialogo_errores(errores)
         else:
             with st.spinner("Guardando…"):
-                ok, mensaje = guardar_borrador(repo, hoja, origen, editado)
+                ok, mensaje = guardar_borrador(repo, hoja, origen, editado, usuario.email)
             if ok:
                 marcar_guardado(clave, f_actual)
-                st.session_state[f"_resultado_{hoja}"] = (True, mensaje)
-                st.rerun()
-            st.error(mensaje, icon="🛑")
+            if ok or not borrador.hay_conflicto(hoja, origen):   # el conflicto se muestra aparte
+                st.session_state[f"_resultado_{hoja}"] = (ok, mensaje)
+            st.rerun()
 
 
 @st.dialog("Revisa antes de guardar", width="large")
@@ -184,9 +190,13 @@ def _dialogo_errores(errores):
 
 
 def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guardado,
-                       solo_lectura):
+                       solo_lectura, usuario):
     """Grilla matricial + feedback en vivo + guardado de borrador."""
     _mostrar_resultado(hoja)
+    # Claves de sesión de la grilla (ver vistas.grilla)
+    borrador.mostrar_conflicto(hoja, origen, [f"_base_{hoja}_{origen}",
+                                              f"_ultimo_{hoja}_{origen}"],
+                               (f"grilla_{hoja}_{origen}_",))
     editado = grilla(cfg, ccos, roster, tarifas, origen, guardado, solo_lectura)
 
     total = estimar_importe(hoja, editado, tarifas)
@@ -201,7 +211,7 @@ def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guard
                                  estricto=False)
     if hay_cambios and not solo_lectura and toca_autoguardar(clave):
         autoguardar(clave, f_actual, errores_de(),
-                    lambda: guardar_borrador(repo, hoja, origen, editado))
+                    lambda: guardar_borrador(repo, hoja, origen, editado, usuario.email))
         hay_cambios = pendiente(clave, f_actual)
 
     st.divider()
@@ -213,24 +223,41 @@ def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guard
             _dialogo_errores(errores)
         else:
             with st.spinner("Guardando…"):
-                resultado = guardar_borrador(repo, hoja, origen, editado)
+                resultado = guardar_borrador(repo, hoja, origen, editado, usuario.email)
             if resultado[0]:
                 marcar_guardado(clave, f_actual)
-            st.session_state[f"_resultado_{hoja}"] = resultado
+            if resultado[0] or not borrador.hay_conflicto(hoja, origen):
+                st.session_state[f"_resultado_{hoja}"] = resultado
             st.rerun()
 
 
-def guardar_borrador(repo, hoja, origen, editado):
-    """Guarda la planilla sin valorizar. Devuelve (ok, mensaje)."""
+def guardar_borrador(repo, hoja, origen, editado, email):
+    """Guarda la planilla sin valorizar. Devuelve (ok, mensaje). Si otra
+    persona la guardó desde que esta sesión la abrió, no guarda: deja el
+    aviso de conflicto (borrador.mostrar_conflicto) para recargar."""
     cfg = cfg_de(hoja)
     filas, cols = preparar_filas(hoja, origen, editado, repo)
     try:
-        n = repo.guardar_borrador(hoja, origen, filas, cols)
+        n, version = repo.guardar_borrador(hoja, origen, filas, cols, email=email,
+                                           version=borrador.version(hoja, origen))
+        borrador.fijar_version(hoja, origen, version)
         marcar(repo, origen, FECHA_GUARDADO=ahora())
         return True, (f"{cfg['etiqueta']}: {n} registro(s) guardado(s). Cuando termines "
                       "todas tus planillas, valoriza desde «Resumen y valorización».")
+    except ConflictoGuardado as c:
+        mensaje = mensaje_conflicto(cfg["etiqueta"], c)
+        borrador.marcar_conflicto(hoja, origen, mensaje)
+        return False, mensaje
     except Exception as ex:
         return False, f"No se guardó nada; se revirtió la operación. Detalle: {ex}"
+
+
+def mensaje_conflicto(etiqueta, c) -> str:
+    from src.flujo import fmt
+    return (f"No se guardó «{etiqueta}»: {c.email or 'otra persona'} la guardó el "
+            f"{fmt(c.fecha)} mientras la editabas. Para no borrar su trabajo, recarga la "
+            "planilla con lo último guardado y vuelve a hacer tus cambios. El guardado "
+            "automático queda en pausa hasta que recargues.")
 
 
 def roster_vacio():

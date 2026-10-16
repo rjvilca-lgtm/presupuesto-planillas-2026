@@ -14,6 +14,7 @@ En DATOS_ENTRADA cada fila de la grilla se guarda como una fila por concepto
 import pandas as pd
 import streamlit as st
 
+from . import borrador
 from .borrador import (autoguardar, firma, marcar_guardado, mostrar_indicador, pendiente,
                        toca_autoguardar)
 from .config import CARGA_ACADEMICA, PRESUPUESTO
@@ -111,7 +112,7 @@ def _totales(df: pd.DataFrame) -> pd.DataFrame:
     return tot.rename(columns={"MES": "Semestre", **CA["conceptos"]})
 
 
-def registro_carga_academica(repo, fl):
+def registro_carga_academica(repo, fl, usuario=None):
     st.caption("Para la Dirección de Gestión Académica. Registra, por semestre y "
                "centro de costo, las horas de titulares, jefes de práctica y "
                "asistentes, como en la hoja Carga académica. Puedes guardar las veces "
@@ -127,6 +128,11 @@ def registro_carga_academica(repo, fl):
         st.warning(f"🔒 La carga académica está {motivo}")
 
     ccos = repo.todos_centros_costo()
+    borrador.mostrar_conflicto(CA["hoja"], DGA, ["_base_carga_academica",
+                                                 "_ultimo_carga_academica",
+                                                 "_aviso_carga_academica"],
+                               ("grilla_carga_academica_",))
+    borrador.registrar_version(repo, CA["hoja"], DGA)
     if "_base_carga_academica" not in st.session_state:
         st.session_state["_base_carga_academica"], aviso = _semilla(repo)
         st.session_state["_aviso_carga_academica"] = aviso
@@ -148,10 +154,22 @@ def registro_carga_academica(repo, fl):
     hay_cambios = pendiente(clave, f_actual)
 
     def _guardar():
+        from .repositorio import ConflictoGuardado
         try:
-            n = repo.guardar_borrador(CA["hoja"], DGA, _filas_destino(editado), COLS_DESTINO)
+            n, version = repo.guardar_borrador(
+                CA["hoja"], DGA, _filas_destino(editado), COLS_DESTINO,
+                email=getattr(usuario, "email", None), version=borrador.version(CA["hoja"], DGA))
+            borrador.fijar_version(CA["hoja"], DGA, version)
             marcar(repo, DGA, FECHA_GUARDADO=ahora())
             return True, f"{n} registro(s) de carga académica guardados."
+        except ConflictoGuardado as c:
+            from .flujo import fmt
+            mensaje = (f"No se guardó la carga académica: {c.email or 'otra persona'} la "
+                       f"guardó el {fmt(c.fecha)} mientras la editabas. Recarga con lo último "
+                       "guardado y vuelve a hacer tus cambios. El guardado automático queda "
+                       "en pausa hasta que recargues.")
+            borrador.marcar_conflicto(CA["hoja"], DGA, mensaje)
+            return False, mensaje
         except Exception as ex:
             return False, f"No se guardó nada; se revirtió la operación. Detalle: {ex}"
 
@@ -173,7 +191,8 @@ def registro_carga_academica(repo, fl):
                 res = _guardar()
             if res[0]:
                 marcar_guardado(clave, f_actual)
-            st.session_state["_resultado_carga_academica"] = res
+            if res[0] or not borrador.hay_conflicto(CA["hoja"], DGA):
+                st.session_state["_resultado_carga_academica"] = res
             st.rerun()
 
     # Sin las tablas del flujo no hay a quién esperar: se permite valorizar

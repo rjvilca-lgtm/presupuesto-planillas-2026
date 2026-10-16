@@ -4,7 +4,8 @@
   (Presupuesto · administración › Limpiar datos 2027).
 
   sp_Limpiar_2027 borra, en una transacción y solo del presupuesto 2027:
-    @Borradores = 1    lo guardado en las planillas (DATOS_ENTRADA, PPTO2027)
+    @Borradores = 1    lo guardado en las planillas (DATOS_ENTRADA, PPTO2027) y
+                       sus versiones de guardado (GUARDADOS_2027)
     @Valorizacion = 1  lo valorizado (PLANILLA, AÑO 2027)
     @Estado = 1        el estado del flujo (ESTADO_DEPARTAMENTO: guardado,
                        valorizado, cerrado y bloqueos por departamento)
@@ -52,6 +53,10 @@ BEGIN
         WHERE PRESUPUESTO = 'PPTO2027' AND (@Departamento IS NULL OR ORIGEN = @Departamento)
         OPTION (RECOMPILE);
         SET @b = @@ROWCOUNT;
+        -- Versiones de guardado (sql/crear_guardados_2027.sql), si existe
+        IF OBJECT_ID('dbo.GUARDADOS_2027', 'U') IS NOT NULL
+            DELETE FROM dbo.GUARDADOS_2027
+            WHERE PRESUPUESTO = 'PPTO2027' AND (@Departamento IS NULL OR ORIGEN = @Departamento);
     END;
 
     IF @Valorizacion = 1
