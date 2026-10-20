@@ -795,6 +795,11 @@ class RepositorioSQL:
             cur.execute("DELETE FROM HORAS_DOCENTES")
             cur.executemany("INSERT INTO HORAS_DOCENTES (DPTO, DNI, NOMBRE, HORAS) "
                             "VALUES (%s, %s, %s, %s)", docentes)
+            # Reemplazo completo: el padrón debe quedar exactamente con el
+            # archivo (el 19/10/2026 dos importaciones cruzadas duplicaron filas)
+            cur.execute("SELECT COUNT(*) FROM HORAS_DOCENTES")
+            if cur.fetchone()[0] != len(docentes):
+                raise RuntimeError("El padrón no quedó igual al archivo; se revierte.")
 
         def sueldos(cur):
             cur.execute("DELETE FROM Remuneraciones_2027")
