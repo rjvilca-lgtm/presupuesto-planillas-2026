@@ -84,6 +84,10 @@ _ROSTER_DEMO = {
 _DEPARTAMENTOS = [("DAIC", "Arquitectura e Ingeniería"),
                   ("DMAT", "Matemática y Estadística")]
 
+_AREAS_DEMO = [("SGEN", "Secretaría General")]
+_CCOS_AREAS_DEMO = {"SGEN": [("01.02.01.02.01", "SECRETARIA GENERAL"),
+                             ("01.02.01.02.02", "REGISTROS ACADEMICOS Y ARCHIVO CENTRAL")]}
+
 # Estructura CECO -> conceptos para la ficha por docente (planillas TC).
 # Vocabulario de conceptos derivado de las columnas de horas (G-W) de la
 # hoja real "Hoja DTC.xlsx" (una fila por docente, un CECO puede repetirse
@@ -173,7 +177,14 @@ class RepositorioDemo:
     _estados: dict = {}
     _fecha_bloqueo = None
 
-    def guardar_borrador(self, hoja, origen, filas, cols, email=None, version=None):
+    def areas(self):
+        return _AREAS_DEMO
+
+    def centros_costo_area(self, area: str) -> pd.DataFrame:
+        return pd.DataFrame(_CCOS_AREAS_DEMO.get(area, []),
+                            columns=["CODIGO_CECO", "DESCRIPCION_CECO"])
+
+    def guardar_borrador(self, hoja, origen, filas, cols, email=None, version=None, sps=()):
         df = pd.DataFrame(filas, columns=cols)
         self._entrada[(hoja, origen)] = df.reindex(columns=COLS_ENTRADA).assign(HOJA_ORIGEN=hoja)
         return len(filas), None
@@ -520,6 +531,23 @@ class RepositorioSQL:
                         "FROM HORAS_DICTADO_PRELIM_2027 WHERE DPTO = %s", (origen,))
         return df if not df.empty else vacio
 
+    def areas(self) -> list[tuple]:
+        """Áreas no académicas que presupuestan ayudantías (sql/crear_areas_2027.sql).
+        Vacío mientras no exista la tabla."""
+        existe = self._leer("SELECT OBJECT_ID('dbo.AREAS_2027', 'U') AS ID")
+        if existe["ID"].iloc[0] is None:
+            return []
+        df = self._leer("SELECT CODIGO, DESCRIPCION FROM AREAS_2027 WHERE ACTIVO = 1 "
+                        "ORDER BY DESCRIPCION")
+        return list(df.itertuples(index=False, name=None))
+
+    def centros_costo_area(self, area: str) -> pd.DataFrame:
+        """Centros de costo 2027 de la dirección del área."""
+        return self._leer(
+            "SELECT c.CENTRO_COSTO AS CODIGO_CECO, c.DESCRIPCION_CC AS DESCRIPCION_CECO "
+            "FROM AREAS_2027 a JOIN CENTROS_COSTOS_2027 c ON c.DIRECCION = a.DIRECCION "
+            "WHERE a.CODIGO = %s ORDER BY c.CENTRO_COSTO", (area,))
+
     def todos_centros_costo(self) -> pd.DataFrame:
         tabla = "CENTROS_COSTOS_2027" if self._cecos_2027() else "CENTROS_COSTOS"
         return self._leer(
@@ -589,6 +617,8 @@ class RepositorioSQL:
             self.roster(d)
             self.estructura_tc(d)
             self.horas_dictado_prelim(d)
+        for a, _ in self.areas():
+            self.centros_costo_area(a)
         for hoja, cfg in PLANILLAS.items():
             if cfg["tarifa"] == "catalogo":
                 self.tarifas(hoja)
@@ -630,12 +660,16 @@ class RepositorioSQL:
 
     def guardar_borrador(self, hoja: str, origen: str, filas: list[list],
                          cols: list[str], email: str | None = None,
-                         version: int | None = None) -> tuple[int, int | None]:
-        """Reemplaza lo guardado de la planilla sin valorizar. version: la que
-        esta sesión vio al abrir la planilla (version_planilla); si alguien
-        guardó después, lanza ConflictoGuardado y no guarda nada.
+                         version: int | None = None,
+                         sps: tuple = ()) -> tuple[int, int | None]:
+        """Reemplaza lo guardado de la planilla. version: la que esta sesión vio
+        al abrir la planilla (version_planilla); si alguien guardó después,
+        lanza ConflictoGuardado y no guarda nada. sps: procedimientos que
+        valorizan en la misma transacción (las áreas, que tienen una sola
+        planilla); sin sps queda sin valorizar.
         Devuelve (filas guardadas, nueva versión)."""
-        n, nueva = self.guardar(hoja, origen, filas, cols, [], email=email, version=version)
+        n, nueva = self.guardar(hoja, origen, filas, cols, list(sps), email=email,
+                                version=version)
         self.limpiar_cache()
         return n, nueva
 

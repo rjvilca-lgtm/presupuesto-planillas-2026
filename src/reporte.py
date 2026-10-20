@@ -3,7 +3,8 @@ Resumen de valorización: los montos que dejaron los procedimientos en PLANILLA.
 
 Muestra 2027 (lo valorizado con la app) y lo compara con 2026 en el mismo
 alcance. Cada usuario ve solo lo suyo: Presupuesto todo, un departamento lo
-suyo, la DGA la carga académica y Desarrollo Humano su valorización (DDH).
+suyo, la DGA la carga académica, Desarrollo Humano su valorización (DDH) y
+cada área no académica sus ayudantías.
 """
 
 import pandas as pd
@@ -30,11 +31,11 @@ MESES_CORTOS = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Set", "
 SOLES = st.column_config.NumberColumn(format="localized")
 
 
-def _alcance(usuario, deptos) -> list[str]:
+def _alcance(usuario, deptos, areas) -> list[str]:
     if usuario.presupuesto:
-        return [d for d, _ in deptos] + [DGA, DDH]
+        return [d for d, _ in deptos] + [DGA, DDH] + [a for a, _ in areas]
     return (list(usuario.departamentos) + ([DGA] if usuario.dga else [])
-            + ([DDH] if usuario.rrhh else []))
+            + ([DDH] if usuario.rrhh else []) + list(usuario.areas))
 
 
 def _preparar(df: pd.DataFrame) -> pd.DataFrame:
@@ -56,8 +57,10 @@ def _tabla_soles(df: pd.DataFrame, **kw):
 def vista_reporte(repo, fl, usuario, deptos):
     st.caption("Montos valorizados (PLANILLA) en soles. 2027 incluye solo lo que ya se "
                "valorizó con la app; 2026 es la referencia en el mismo alcance.")
-    alcance = _alcance(usuario, deptos)
-    nombres = {**dict(deptos), DGA: "Carga académica (DGA)", DDH: "Desarrollo Humano"}
+    areas = repo.areas()
+    alcance = _alcance(usuario, deptos, areas)
+    nombres = {**dict(deptos), **dict(areas), DGA: "Carga académica (DGA)",
+               DDH: "Desarrollo Humano"}
     d27 = _preparar(repo.valorizacion(2027, alcance))
     d26 = _preparar(repo.valorizacion(2026, alcance))
 

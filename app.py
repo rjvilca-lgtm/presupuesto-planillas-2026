@@ -65,6 +65,8 @@ def _main(contexto):
     if usuario.presupuesto or usuario.departamentos:
         pestañas.append(("Presupuesto por departamento",
                          lambda: vista_departamentos(repo, fl, usuario)))
+    if usuario.presupuesto or usuario.areas:
+        pestañas.append(("Ayudantías · áreas", lambda: vista_areas(repo, fl, usuario)))
     if usuario.presupuesto or usuario.dga:
         pestañas.append(("Carga académica · registro (DGA)",
                          lambda: registro_carga_academica(repo, fl, usuario)))
@@ -137,6 +139,41 @@ def vista_departamentos(repo, fl, usuario):
     borrador.registrar_version(repo, seleccion, origen)
     _renderizar_grilla(repo, fl, seleccion, cfg, ccos, roster, tarifas, origen,
                        entrada[entrada["HOJA_ORIGEN"] == seleccion], solo_lectura, usuario)
+
+
+AYUDANTIAS = "Ayudantias"
+
+
+def vista_areas(repo, fl, usuario):
+    """Ayudantías de las áreas no académicas (sql/crear_areas_2027.sql): la
+    misma planilla que la de los departamentos, con los centros de costo de la
+    dirección del área. Al guardar queda valorizada (es su única planilla)."""
+    areas = repo.areas()
+    if not usuario.presupuesto:
+        areas = [a for a in areas if a[0] in set(usuario.areas)]
+    if not areas:
+        st.warning("Aún no hay áreas registradas. Ejecuta `sql/crear_areas_2027.sql` en "
+                   "Azure.", icon="⚠️")
+        return
+    nombres = dict(areas)
+    origen = st.selectbox("Área", list(nombres), key="area_ayudantias",
+                          format_func=lambda a: f"{a} · {nombres[a]}")
+    st.session_state["_pantalla_detalle"] = origen
+    solo_lectura = aviso_departamento(fl, origen)
+
+    ccos = repo.centros_costo_area(origen)
+    if ccos.empty:
+        st.warning(f"El área {origen} no tiene centros de costo 2027. Revisa su dirección "
+                   "en AREAS_2027.", icon="⚠️")
+        return
+    cfg = cfg_de(AYUDANTIAS)
+    st.caption(cfg["ayuda"] + " Al guardar, las ayudantías quedan valorizadas.")
+    entrada = repo.entrada(origen)
+    borrador.registrar_version(repo, AYUDANTIAS, origen)
+    _renderizar_grilla(repo, fl, AYUDANTIAS, cfg, ccos, roster_vacio(),
+                       repo.tarifas(AYUDANTIAS), origen,
+                       entrada[entrada["HOJA_ORIGEN"] == AYUDANTIAS], solo_lectura, usuario,
+                       sps=tuple(cfg["sps"]))
 
 
 def _mostrar_resultado(hoja):
@@ -212,8 +249,9 @@ def _dialogo_errores(errores):
 
 
 def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guardado,
-                       solo_lectura, usuario):
-    """Grilla matricial + feedback en vivo + guardado de borrador."""
+                       solo_lectura, usuario, sps=()):
+    """Grilla matricial + feedback en vivo + guardado de borrador (con sps,
+    además valoriza al guardar: las áreas de ayudantías)."""
     _mostrar_resultado(hoja)
     # Claves de sesión de la grilla (ver vistas.grilla)
     borrador.mostrar_conflicto(hoja, origen, [f"_base_{hoja}_{origen}",
@@ -233,7 +271,7 @@ def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guard
                                  estricto=False)
     if hay_cambios and not solo_lectura and toca_autoguardar(clave):
         autoguardar(clave, f_actual, errores_de(),
-                    lambda: guardar_borrador(repo, hoja, origen, editado, usuario.email))
+                    lambda: guardar_borrador(repo, hoja, origen, editado, usuario.email, sps))
         hay_cambios = pendiente(clave, f_actual)
 
     st.divider()
@@ -245,7 +283,8 @@ def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guard
             _dialogo_errores(errores)
         else:
             with st.spinner("Guardando…"):
-                resultado = guardar_borrador(repo, hoja, origen, editado, usuario.email)
+                resultado = guardar_borrador(repo, hoja, origen, editado, usuario.email,
+                                             sps)
             if resultado[0]:
                 marcar_guardado(clave, f_actual)
             if resultado[0] or not borrador.hay_conflicto(hoja, origen):
@@ -253,16 +292,21 @@ def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guard
             st.rerun()
 
 
-def guardar_borrador(repo, hoja, origen, editado, email):
-    """Guarda la planilla sin valorizar. Devuelve (ok, mensaje). Si otra
-    persona la guardó desde que esta sesión la abrió, no guarda: deja el
-    aviso de conflicto (borrador.mostrar_conflicto) para recargar."""
+def guardar_borrador(repo, hoja, origen, editado, email, sps=()):
+    """Guarda la planilla (sin valorizar, o valorizándola en la misma
+    transacción si vienen sps). Devuelve (ok, mensaje). Si otra persona la
+    guardó desde que esta sesión la abrió, no guarda: deja el aviso de
+    conflicto (borrador.mostrar_conflicto) para recargar."""
     cfg = cfg_de(hoja)
     filas, cols = preparar_filas(hoja, origen, editado, repo)
     try:
         n, version = repo.guardar_borrador(hoja, origen, filas, cols, email=email,
-                                           version=borrador.version(hoja, origen))
+                                           version=borrador.version(hoja, origen), sps=sps)
         borrador.fijar_version(hoja, origen, version)
+        if sps:
+            momento = ahora()
+            marcar(repo, origen, FECHA_GUARDADO=momento, FECHA_VALORIZACION=momento)
+            return True, f"{cfg['etiqueta']}: {n} registro(s) guardado(s) y valorizado(s)."
         marcar(repo, origen, FECHA_GUARDADO=ahora())
         return True, (f"{cfg['etiqueta']}: {n} registro(s) guardado(s). Cuando termines "
                       "todas tus planillas, valoriza desde «Resumen y valorización».")

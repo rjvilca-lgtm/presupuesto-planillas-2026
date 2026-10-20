@@ -323,13 +323,14 @@ def _dialogo_cerrar(repo, origen):
 
 # ---------------------------------------------------------- administración
 
-ROLES = {"DEPARTAMENTO": "Departamento", "DGA": "DGA",
+ROLES = {"DEPARTAMENTO": "Departamento", "AREA": "Área (ayudantías)", "DGA": "DGA",
          "DESARROLLO_HUMANO": "Desarrollo Humano", "PRESUPUESTO": "Presupuesto"}
 
 def vista_admin(repo, fl: Flujo, deptos: list[tuple], usuario):
     """Solo para usuarios con rol PRESUPUESTO (app.py no muestra la pestaña
     a los demás)."""
-    _admin_usuarios(repo, deptos)
+    areas = repo.areas()
+    _admin_usuarios(repo, deptos, areas)
     st.divider()
     _admin_parametros(repo, usuario)
     st.divider()
@@ -352,9 +353,10 @@ def vista_admin(repo, fl: Flujo, deptos: list[tuple], usuario):
         repo.fijar_fecha_bloqueo(None)
         st.rerun()
 
-    st.subheader("Departamentos")
-    codigos = [d for d, _ in deptos] + [DGA]
-    nombres = {**dict(deptos), DGA: "Dirección de Gestión Académica (carga académica)"}
+    st.subheader("Departamentos y áreas")
+    codigos = [d for d, _ in deptos] + [DGA] + [a for a, _ in areas]
+    nombres = {**dict(deptos), DGA: "Dirección de Gestión Académica (carga académica)",
+               **{a: f"{n} (ayudantías)" for a, n in areas}}
     filas = []
     for d in codigos:
         e = fl.estado(d)
@@ -390,7 +392,7 @@ def vista_admin(repo, fl: Flujo, deptos: list[tuple], usuario):
                "nuevo, la carga académica no se puede volver a valorizar.")
 
     st.divider()
-    _admin_limpieza(repo, fl, deptos, usuario)
+    _admin_limpieza(repo, fl, deptos, usuario, areas)
 
 
 _PARTES_LIMPIEZA = {
@@ -402,7 +404,7 @@ _PARTES_LIMPIEZA = {
 }
 
 
-def _admin_limpieza(repo, fl: Flujo, deptos: list[tuple], usuario):
+def _admin_limpieza(repo, fl: Flujo, deptos: list[tuple], usuario, areas: list[tuple]):
     st.subheader("Limpiar datos 2027")
     st.caption("Borra datos del presupuesto 2027, por ejemplo las pruebas, para dejar la app "
                "lista para producción: todo o por partes y por departamento. No toca los datos "
@@ -419,9 +421,10 @@ def _admin_limpieza(repo, fl: Flujo, deptos: list[tuple], usuario):
 
     conteos = repo.conteos_2027().set_index("DEPTO")
     nombres = {**dict(deptos), DGA: "Carga académica (DGA)",
-               "DDH": "Valorización de Desarrollo Humano"}
+               "DDH": "Valorización de Desarrollo Humano",
+               **{a: f"{n} (ayudantías)" for a, n in areas}}
     opciones = list(dict.fromkeys([d for d, _ in deptos] + [DGA, "DDH"]
-                                  + [d for d in conteos.index if d]))
+                                  + [a for a, _ in areas] + [d for d in conteos.index if d]))
     todos = st.toggle("Todos los departamentos", value=True, key="limpiar_todos")
     elegidos = None if todos else st.multiselect(
         "Departamentos", opciones, format_func=lambda d: f"{d} · {nombres.get(d, d)}",
@@ -534,33 +537,36 @@ def _admin_parametros(repo, usuario):
                          "VALOR_NUEVO": "Después"})
 
 
-def _admin_usuarios(repo, deptos: list[tuple]):
+def _admin_usuarios(repo, deptos: list[tuple], areas: list[tuple]):
     st.subheader("Usuarios")
     st.caption("Quién puede entrar con su cuenta @ucsp.edu.pe y qué puede hacer. "
                "Presupuesto ve todo (salvo los salarios); DGA registra la carga académica; "
                "Desarrollo Humano mantiene docentes, horas, tarifas y salarios; "
-               "Departamento registra las planillas de ese departamento.")
+               "Departamento registra las planillas de ese departamento; Área registra las "
+               "ayudantías de esa área no académica.")
     try:
         usuarios = repo.listar_usuarios()
     except Exception as ex:
         st.warning(f"No se pudo leer USUARIOS_PLANILLAS ({ex}). Ejecuta "
                    "`sql/crear_usuarios_planillas.sql` en Azure.", icon="⚠️")
         return
-    nombres = dict(deptos)
+    nombres = {**dict(deptos), **dict(areas)}
     vista = usuarios.assign(
         ROL=usuarios["ROL"].map(ROLES),
         DEPARTAMENTO=usuarios["DEPARTAMENTO"].map(
             lambda d: f"{d} · {nombres.get(d, '')}" if isinstance(d, str) else ""),
         ACTIVO=usuarios["ACTIVO"].map(lambda a: "Sí" if a else "No"))
     st.dataframe(vista.rename(columns={"EMAIL": "Correo", "ROL": "Rol",
-                                       "DEPARTAMENTO": "Departamento", "ACTIVO": "Activo"}),
+                                       "DEPARTAMENTO": "Departamento o área",
+                                       "ACTIVO": "Activo"}),
                  hide_index=True, width="stretch")
 
     with st.form("form_usuario", clear_on_submit=True):
         c1, c2, c3 = st.columns([3, 2, 3])
         email = c1.text_input("Correo", placeholder="nombre@ucsp.edu.pe")
         rol = c2.selectbox("Rol", list(ROLES), format_func=ROLES.get)
-        depto = c3.selectbox("Departamento (solo rol Departamento)", [d for d, _ in deptos],
+        depto = c3.selectbox("Departamento o área (roles Departamento y Área)",
+                             [d for d, _ in deptos] + [a for a, _ in areas],
                              format_func=lambda d: f"{d} · {nombres[d]}")
         b1, b2 = st.columns(2)
         dar = b1.form_submit_button("Dar acceso", type="primary", width="stretch")
@@ -570,6 +576,12 @@ def _admin_usuarios(repo, deptos: list[tuple]):
         if not email.endswith("@ucsp.edu.pe") or email.count("@") != 1:
             st.error("Ingresa un correo @ucsp.edu.pe válido.")
             return
-        repo.guardar_usuario(email, rol, depto if rol == "DEPARTAMENTO" else None,
+        if rol == "DEPARTAMENTO" and depto not in dict(deptos):
+            st.error("El rol Departamento va con un departamento, no con un área.")
+            return
+        if rol == "AREA" and depto not in dict(areas):
+            st.error("El rol Área va con un área no académica, no con un departamento.")
+            return
+        repo.guardar_usuario(email, rol, depto if rol in ("DEPARTAMENTO", "AREA") else None,
                              activo=bool(dar))
         st.rerun()
