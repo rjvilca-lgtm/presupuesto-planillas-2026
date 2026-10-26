@@ -94,19 +94,23 @@ def toca_autoguardar(clave: str) -> bool:
 
 # ----------------------------------------------------- guardados simultáneos
 
+def versiones() -> dict:
+    """Versión guardada de cada planilla ("hoja|origen") que vio esta sesión.
+    Es un dict común guardado en la sesión: quien guarda lo toma ANTES de
+    guardar y anota la versión nueva con versiones()[clave] = v. Escribir en
+    st.session_state después del COMMIT no sirve: cada acceso a
+    st.session_state es un punto donde Streamlit corta la ejecución si llegó
+    otro clic (p. ej. pulsar Guardar dos veces), y la versión recién guardada
+    se perdía; el siguiente guardado se creía en conflicto consigo mismo."""
+    return st.session_state.setdefault("_borrador_versiones", {})
+
+
 def registrar_version(repo, hoja: str, origen: str):
     """Anota la versión guardada al abrir la planilla (una vez por sesión)."""
+    v = versiones()
     clave = f"{hoja}|{origen}"
-    if _k(clave, "version") not in st.session_state:
-        st.session_state[_k(clave, "version")] = repo.version_planilla(hoja, origen)
-
-
-def version(hoja: str, origen: str):
-    return st.session_state.get(_k(f"{hoja}|{origen}", "version"))
-
-
-def fijar_version(hoja: str, origen: str, valor):
-    st.session_state[_k(f"{hoja}|{origen}", "version")] = valor
+    if clave not in v:
+        v[clave] = repo.version_planilla(hoja, origen)
 
 
 def hay_conflicto(hoja: str, origen: str) -> bool:
@@ -132,7 +136,8 @@ def mostrar_conflicto(hoja: str, origen: str, claves_estado: list[str],
         for k in list(st.session_state.keys()):
             if k in claves_estado or (prefijos_estado and str(k).startswith(prefijos_estado)):
                 del st.session_state[k]
-        for que in ("version", "conflicto", "error"):
+        versiones().pop(clave, None)
+        for que in ("conflicto", "error"):
             st.session_state.pop(_k(clave, que), None)
         olvidar(clave)
         st.rerun()

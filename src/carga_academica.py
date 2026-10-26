@@ -155,11 +155,12 @@ def registro_carga_academica(repo, fl, usuario=None):
 
     def _guardar():
         from .repositorio import ConflictoGuardado
+        versiones, clave_v = borrador.versiones(), f"{CA['hoja']}|{DGA}"
         try:
-            n, version = repo.guardar_borrador(
+            n, _ = repo.guardar_borrador(
                 CA["hoja"], DGA, _filas_destino(editado), COLS_DESTINO,
-                email=getattr(usuario, "email", None), version=borrador.version(CA["hoja"], DGA))
-            borrador.fijar_version(CA["hoja"], DGA, version)
+                email=getattr(usuario, "email", None), version=versiones.get(clave_v),
+                al_confirmar=lambda v: versiones.__setitem__(clave_v, v))
             marcar(repo, DGA, FECHA_GUARDADO=ahora())
             return True, f"{n} registro(s) de carga académica guardados."
         except ConflictoGuardado as c:

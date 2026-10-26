@@ -183,9 +183,13 @@ def _mostrar_resultado(hoja):
         (st.success if ok else st.error)(mensaje, icon="✅" if ok else "🛑")
 
 
+@st.fragment
 def _renderizar_ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guardado,
                          solo_lectura, usuario, prelim=None):
-    """Ficha TC (maestro-detalle) con guardado de borrador en la barra fija."""
+    """Ficha TC (maestro-detalle) con guardado de borrador en la barra fija.
+    Es un fragmento: cada tecla o clic dentro de la ficha vuelve a dibujar solo
+    la ficha, no la página entera (encabezado, flujo, consultas). Guardar y
+    agregar docente sí recargan toda la página (st.rerun)."""
     cfg = cfg_de(hoja)
     _mostrar_resultado(hoja)
     estado_ficha = f"_ficha_{hoja}_{origen}"   # ver vistas.ficha_docente
@@ -238,6 +242,9 @@ def _renderizar_ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guard
             if ok or not borrador.hay_conflicto(hoja, origen):   # el conflicto se muestra aparte
                 st.session_state[f"_resultado_{hoja}"] = (ok, mensaje)
             st.rerun()
+    # Al rehacer solo el fragmento, el aviso al cerrar la pestaña debe enterarse
+    # de los cambios sin guardar
+    aviso_al_salir()
 
 
 @st.dialog("Revisa antes de guardar", width="large")
@@ -299,10 +306,11 @@ def guardar_borrador(repo, hoja, origen, editado, email, sps=()):
     conflicto (borrador.mostrar_conflicto) para recargar."""
     cfg = cfg_de(hoja)
     filas, cols = preparar_filas(hoja, origen, editado, repo)
+    versiones, clave = borrador.versiones(), f"{hoja}|{origen}"
     try:
-        n, version = repo.guardar_borrador(hoja, origen, filas, cols, email=email,
-                                           version=borrador.version(hoja, origen), sps=sps)
-        borrador.fijar_version(hoja, origen, version)
+        n, _ = repo.guardar_borrador(hoja, origen, filas, cols, email=email,
+                                     version=versiones.get(clave), sps=sps,
+                                     al_confirmar=lambda v: versiones.__setitem__(clave, v))
         if sps:
             momento = ahora()
             marcar(repo, origen, FECHA_GUARDADO=momento, FECHA_VALORIZACION=momento)

@@ -184,9 +184,12 @@ class RepositorioDemo:
         return pd.DataFrame(_CCOS_AREAS_DEMO.get(area, []),
                             columns=["CODIGO_CECO", "DESCRIPCION_CECO"])
 
-    def guardar_borrador(self, hoja, origen, filas, cols, email=None, version=None, sps=()):
+    def guardar_borrador(self, hoja, origen, filas, cols, email=None, version=None, sps=(),
+                         al_confirmar=None):
         df = pd.DataFrame(filas, columns=cols)
         self._entrada[(hoja, origen)] = df.reindex(columns=COLS_ENTRADA).assign(HOJA_ORIGEN=hoja)
+        if al_confirmar:
+            al_confirmar(None)
         return len(filas), None
 
     def version_planilla(self, hoja, origen):
@@ -506,7 +509,8 @@ class RepositorioSQL:
                 f"LEFT JOIN {catalogo} c ON c.CENTRO_COSTO = t.CENTRO_COSTO "
                 "WHERE t.DEPARTAMENTO = %s AND t.ACTIVO = 1 "
                 "ORDER BY t.CENTRO_COSTO, t.CONCEPTO", (origen,))
-        return self._leer(
+        # Derivada de los borradores: cambia al guardar
+        return self._leer_vivo(
             "SELECT DISTINCT LTRIM(RTRIM(de.CENTRO_COSTO)) AS CODIGO_CECO, "
             "CASE WHEN LTRIM(RTRIM(de.CENTRO_COSTO)) = '0' THEN N'Gestión de Dirección (sin centro de costo; la valoriza Desarrollo Humano)' "
             "ELSE COALESCE(c.DESCRIPCION_CC, LTRIM(RTRIM(de.CENTRO_COSTO))) END AS DESCRIPCION_CECO, "
@@ -572,7 +576,8 @@ class RepositorioSQL:
                 "WHERE d.HOJA_ORIGEN = %s AND d.ORIGEN = %s AND d." + filtro + " "
                 "GROUP BY LTRIM(RTRIM(d.MES)), COALESCE(e.CODIGO_NUEVO, LTRIM(RTRIM(d.CENTRO_COSTO))), "
                 "LTRIM(RTRIM(d.CONCEPTO))", params)
-        return self._leer(
+        leer = self._leer_vivo if actual else self._leer
+        return leer(
             "SELECT LTRIM(RTRIM(MES)) AS MES, LTRIM(RTRIM(CENTRO_COSTO)) AS CENTRO_COSTO, "
             "LTRIM(RTRIM(CONCEPTO)) AS CONCEPTO, CAST(IMPORTE AS float) AS IMPORTE "
             "FROM DATOS_ENTRADA WHERE HOJA_ORIGEN = %s AND ORIGEN = %s AND " + filtro,
@@ -584,7 +589,7 @@ class RepositorioSQL:
         las horas de titulares (mismo filtro y misma regla de semestre: MES
         1-7 -> 2027-1, 8-12 -> 2027-2)."""
         sem1, sem2 = CARGA_ACADEMICA["semestres"]
-        return self._leer(
+        return self._leer_vivo(
             "SELECT MES, CENTRO_COSTO, ORIGEN, DNI, NOMBRE, "
             "CAST(SUM(HORAS) AS float) AS HORAS FROM ("
             "  SELECT CASE WHEN TRY_CAST(MES AS INT) BETWEEN 1 AND 7 THEN %s "
@@ -598,9 +603,17 @@ class RepositorioSQL:
             (sem1, sem2, CONCEPTO_ACADEMICAS, PRESUPUESTO))
 
     def limpiar_cache(self):
-        """Tras guardar: la consulta debe ver lo recién cargado, no la copia
-        cacheada."""
+        """Tras cambiar catálogos o datos de Desarrollo Humano: la consulta debe
+        ver lo recién cargado, no la copia cacheada."""
         _leer_cacheado.clear()
+        _leer_corto.clear()
+
+    def limpiar_cache_trabajo(self):
+        """Tras guardar o valorizar: solo cambian los borradores, la valorización
+        y los estados (caché corta). Los catálogos se quedan: vaciarlos en cada
+        guardado (cada minuto con el guardado automático) obligaba a volver a
+        leer padrón, centros de costo y estructura TC de la base en el siguiente
+        clic."""
         _leer_corto.clear()
 
     def precalentar(self):
@@ -661,16 +674,17 @@ class RepositorioSQL:
     def guardar_borrador(self, hoja: str, origen: str, filas: list[list],
                          cols: list[str], email: str | None = None,
                          version: int | None = None,
-                         sps: tuple = ()) -> tuple[int, int | None]:
+                         sps: tuple = (), al_confirmar=None) -> tuple[int, int | None]:
         """Reemplaza lo guardado de la planilla. version: la que esta sesión vio
         al abrir la planilla (version_planilla); si alguien guardó después,
         lanza ConflictoGuardado y no guarda nada. sps: procedimientos que
         valorizan en la misma transacción (las áreas, que tienen una sola
-        planilla); sin sps queda sin valorizar.
+        planilla); sin sps queda sin valorizar. al_confirmar(nueva versión): se
+        llama apenas se confirma la transacción (ver borrador.versiones).
         Devuelve (filas guardadas, nueva versión)."""
         n, nueva = self.guardar(hoja, origen, filas, cols, list(sps), email=email,
-                                version=version)
-        self.limpiar_cache()
+                                version=version, al_confirmar=al_confirmar)
+        self.limpiar_cache_trabajo()
         return n, nueva
 
     def _control_versiones(self) -> bool:
@@ -705,7 +719,7 @@ class RepositorioSQL:
                 conn.rollback()
                 print(f"[valorizar] ROLLBACK por error: {e!r}", flush=True)
                 raise
-        self.limpiar_cache()
+        self.limpiar_cache_trabajo()
 
     def estado_flujo(self):
         """(estados por departamento, fecha de bloqueo, tablas disponibles).
@@ -1084,13 +1098,15 @@ class RepositorioSQL:
 
     def guardar(self, hoja: str, origen: str, filas: list[list], cols: list[str],
                 sps: list[tuple], email: str | None = None,
-                version: int | None = None) -> tuple[int, int | None]:
+                version: int | None = None, al_confirmar=None) -> tuple[int, int | None]:
         """DELETE + INSERT parametrizado + EXEC, en una sola transacción.
         El DELETE solo alcanza las filas del PRESUPUESTO de la app.
         Si algo falla, rollback: nunca quedan datos borrados a medio cargar.
         Con GUARDADOS_2027: si la versión guardada no es la que vio esta sesión
         (otra persona guardó mientras tanto), no guarda y lanza
         ConflictoGuardado; si guarda, sube la versión y anota quién.
+        al_confirmar(nueva versión) se llama justo después del COMMIT, sin
+        nada de Streamlit en medio (ver borrador.versiones).
         Devuelve (filas, nueva versión o None)."""
         control = self._control_versiones()
         placeholders = ", ".join(["%s"] * len(cols))
@@ -1146,8 +1162,11 @@ class RepositorioSQL:
                         [PRESUPUESTO, hoja, origen, actual + 1, email or "", lima,
                          actual + 1, email or "", lima])
                 conn.commit()
+                nueva = actual + 1 if control else None
+                if al_confirmar:
+                    al_confirmar(nueva)
                 print("[guardar] COMMIT", flush=True)
-                return len(filas), (actual + 1 if control else None)
+                return len(filas), nueva
             except Exception as e:
                 conn.rollback()
                 print(f"[guardar] ROLLBACK por error: {e!r}", flush=True)
