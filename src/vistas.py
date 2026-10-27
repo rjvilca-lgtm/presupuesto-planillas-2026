@@ -618,9 +618,13 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                                 help="Se calcula sola: horas académicas × 45/60.")
                         else:
                             # hh:mm en pantalla; en el ledger (y en la base) va en
-                            # decimal: 03:30 -> 3.5
+                            # decimal: 03:30 -> 3.5. Si el campo ya está en la sesión
+                            # (_normalizar_hhmm lo reescribe) no se pasa value: Streamlit
+                            # avisa en los logs cuando llegan los dos.
+                            if key not in st.session_state:
+                                st.session_state[key] = a_hhmm(fila["HORAS"])
                             texto = col.text_input(
-                                str(concepto), value=a_hhmm(fila["HORAS"]), key=key,
+                                str(concepto), key=key,
                                 disabled=solo_lectura,
                                 placeholder="hh:mm", on_change=_normalizar_hhmm, args=(key,),
                                 help="Horas académicas de dictado (45 min), en hh:mm. "

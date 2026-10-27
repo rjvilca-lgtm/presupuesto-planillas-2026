@@ -12,9 +12,34 @@ se quiera; el departamento valoriza todo junto desde "Resumen y valorización".
     streamlit run app.py
 """
 
+import sys
 import time
+from pathlib import Path
 
 import streamlit as st
+
+
+def _recargar_src_si_cambio():
+    """Con fileWatcherType = "none" (.streamlit/config.toml), al hacer push
+    Streamlit Cloud vuelve a ejecutar app.py pero deja en memoria los módulos
+    de src/ anteriores: el app.py nuevo llamaba funciones que el src/ viejo no
+    tenía (AttributeError). Si los archivos de src/ cambiaron desde que se
+    importaron, se olvidan para que los imports de abajo carguen los nuevos.
+    También se vacía st.cache_resource: guarda objetos de las clases viejas
+    (el repositorio de crear_repositorio, sin los métodos nuevos)."""
+    huella = tuple(sorted((p.name, p.stat().st_mtime_ns)
+                          for p in (Path(__file__).parent / "src").glob("*.py")))
+    src = sys.modules.get("src")
+    if src is not None and getattr(src, "_huella", None) != huella:
+        for nombre in [m for m in sys.modules if m == "src" or m.startswith("src.")]:
+            del sys.modules[nombre]
+        st.cache_resource.clear()
+        print("[app] src/ cambió: se recargan sus módulos", flush=True)
+    import src as nuevo
+    nuevo._huella = huella
+
+
+_recargar_src_si_cambio()
 
 from src.auth import barra_usuario, exigir_login
 from src import borrador
