@@ -51,6 +51,7 @@ from src.config import MESES, cfg_de, dims_fila
 from src.flujo import (aviso_departamento, leer_flujo, marcar, ahora, panel_flujo,
                        vista_admin, vista_resumen)
 from src.reporte import vista_reporte
+from src import plantilla_tc
 from src.rrhh import vista_desarrollo_humano
 from src.repositorio import ConflictoGuardado, crear_repositorio, preparar_filas
 from src.validacion import conteo, estimar_importe, total_horas, validar
@@ -219,8 +220,10 @@ def _renderizar_ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guard
     _mostrar_resultado(hoja)
     estado_ficha = f"_ficha_{hoja}_{origen}"   # ver vistas.ficha_docente
     borrador.mostrar_conflicto(hoja, origen, [estado_ficha], (f"h_{estado_ficha}_",))
+    zona_excel = st.container()   # arriba de la ficha; se llena cuando la ficha existe
     editado = ficha_docente(cfg, ccos, estructura, roster, origen, guardado, solo_lectura,
                             prelim)
+    _excel_tc(zona_excel, hoja, origen, estado_ficha, ccos, estructura, solo_lectura)
 
     # La estructura TC puede traer CECOs de otros departamentos (docentes
     # transversales); son válidos porque vienen del catálogo, no del usuario.
@@ -270,6 +273,61 @@ def _renderizar_ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guard
     # Al rehacer solo el fragmento, el aviso al cerrar la pestaña debe enterarse
     # de los cambios sin guardar
     aviso_al_salir()
+
+
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@st.cache_data(max_entries=20, show_spinner=False)
+def _excel_ficha(ledger, hoja, origen, desc_ceco):
+    return plantilla_tc.plantilla(ledger, hoja, origen, desc_ceco)
+
+
+def _excel_tc(zona, hoja, origen, estado_ficha, ccos, estructura, solo_lectura):
+    """Descargar la ficha del semestre en Excel y volver a cargarla llenada
+    (src/plantilla_tc.py). Cargar solo pasa las horas a la ficha: se guardan
+    con el botón Guardar, con sus validaciones."""
+    ledger = st.session_state.get(estado_ficha)
+    if ledger is None or ledger.empty:
+        return
+    with zona.expander("📊 Llenar en Excel: descargar la ficha y cargarla llenada"):
+        desc = dict(zip(estructura["CODIGO_CECO"], estructura["DESCRIPCION_CECO"]))
+        desc.update(zip(ccos["CODIGO_CECO"], ccos["DESCRIPCION_CECO"]))
+        semestre = "I" if hoja == TC_HOJAS[0] else "II"
+        c1, c2 = st.columns([1, 2], vertical_alignment="bottom")
+        c1.download_button("⬇ Descargar la ficha en Excel",
+                           _excel_ficha(ledger, hoja, origen, desc),
+                           file_name=f"plan_tc_{origen}_{semestre}_semestre_2027.xlsx",
+                           mime=XLSX, on_click="ignore", width="stretch",
+                           key=f"btn_excel_{estado_ficha}")
+        if solo_lectura:
+            return
+        c1.caption("Sale con las horas que hay ahora en la ficha.")
+        ver_key = f"_ver_excel_{estado_ficha}"
+        archivo = c2.file_uploader("Cargar el Excel llenado", type=["xlsx"],
+                                   key=f"up_tc_{estado_ficha}_{st.session_state.get(ver_key, 0)}")
+        if archivo is None:
+            return
+        nuevo, errores, resumen = plantilla_tc.leer(archivo, ledger, hoja, origen)
+        if errores:
+            st.error(f"No se cargó nada: el archivo tiene {len(errores)} observación(es).",
+                     icon="🛑")
+            for e in errores[:15]:
+                st.markdown(f"- {e}")
+            if len(errores) > 15:
+                st.caption(f"… y {len(errores) - 15} más.")
+            return
+        st.info(f"Archivo correcto: {resumen} Al cargarlo, esas horas reemplazan a las de "
+                "la ficha; lo que no esté en el archivo queda igual.", icon="📄")
+        if st.button("Cargar en la ficha", type="primary", key=f"btn_cargar_{estado_ficha}"):
+            st.session_state[estado_ficha] = nuevo
+            # Los campos de horas se vuelven a crear con los valores del Excel
+            for k in [k for k in st.session_state if str(k).startswith(f"h_{estado_ficha}_")]:
+                del st.session_state[k]
+            st.session_state[ver_key] = st.session_state.get(ver_key, 0) + 1
+            st.session_state[f"_resultado_{hoja}"] = (
+                True, "Horas del Excel cargadas en la ficha. Revísalas y pulsa Guardar.")
+            st.rerun(scope="fragment")
 
 
 @st.dialog("Revisa antes de guardar", width="large")
