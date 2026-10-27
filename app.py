@@ -202,10 +202,17 @@ def vista_areas(repo, fl, usuario):
                        sps=tuple(cfg["sps"]))
 
 
-def _mostrar_resultado(hoja):
+def _mostrar_resultado(hoja, flotante=False):
+    """flotante: el éxito sale como aviso flotante (st.toast), sin empujar la
+    pantalla; así se ve aunque se esté abajo en la ficha. Los errores se quedan
+    también arriba, para leerlos con calma."""
     resultado = st.session_state.pop(f"_resultado_{hoja}", None)
     if resultado:
         ok, mensaje = resultado
+        if flotante:
+            st.toast(mensaje, icon="✅" if ok else "🛑")
+            if ok:
+                return
         (st.success if ok else st.error)(mensaje, icon="✅" if ok else "🛑")
 
 
@@ -214,10 +221,11 @@ def _renderizar_ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guard
                          solo_lectura, usuario, prelim=None):
     """Ficha TC (maestro-detalle) con guardado de borrador en la barra fija.
     Es un fragmento: cada tecla o clic dentro de la ficha vuelve a dibujar solo
-    la ficha, no la página entera (encabezado, flujo, consultas). Guardar y
-    agregar docente sí recargan toda la página (st.rerun)."""
+    la ficha, no la página entera (encabezado, flujo, consultas). Guardar
+    también rehace solo la ficha: la pantalla se queda donde estaba, en el
+    mismo docente. Agregar docente recarga toda la página."""
     cfg = cfg_de(hoja)
-    _mostrar_resultado(hoja)
+    _mostrar_resultado(hoja, flotante=True)
     estado_ficha = f"_ficha_{hoja}_{origen}"   # ver vistas.ficha_docente
     borrador.mostrar_conflicto(hoja, origen, [estado_ficha], (f"h_{estado_ficha}_",))
     zona_excel = st.container()   # arriba de la ficha; se llena cuando la ficha existe
@@ -247,7 +255,8 @@ def _renderizar_ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guard
     with st.container(key=f"barra_guardar_{hoja}"):
         c_info, c_btn = st.columns([3, 1])
         con_horas = editado.loc[editado[cfg["mes_carga"]] > 0, "DNI"].nunique()
-        guardado_en = fl.estado(origen).get("FECHA_GUARDADO")
+        # Leído aquí y no de fl: tras guardar solo se rehace el fragmento
+        guardado_en = leer_flujo(repo).estado(origen).get("FECHA_GUARDADO")
         from src.flujo import fmt
         c_info.markdown(
             f'<div class="bottom-info">{cfg["etiqueta"]} · '
@@ -269,13 +278,22 @@ def _renderizar_ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guard
                 marcar_guardado(clave, f_actual)
             if ok or not borrador.hay_conflicto(hoja, origen):   # el conflicto se muestra aparte
                 st.session_state[f"_resultado_{hoja}"] = (ok, mensaje)
-            st.rerun()
+            _rehacer_ficha()
     # Al rehacer solo el fragmento, el aviso al cerrar la pestaña debe enterarse
     # de los cambios sin guardar
     aviso_al_salir()
 
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _rehacer_ficha():
+    """Vuelve a dibujar solo la ficha (la pantalla no salta). scope="fragment"
+    solo vale si esta ejecución ya es del fragmento; si no (el clic llegó junto
+    con una recarga completa), se recarga todo."""
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+    ctx = get_script_run_ctx()
+    st.rerun(scope="fragment" if ctx and ctx.fragment_ids_this_run else "app")
 
 
 @st.cache_data(max_entries=20, show_spinner=False)
@@ -327,7 +345,7 @@ def _excel_tc(zona, hoja, origen, estado_ficha, ccos, estructura, solo_lectura):
             st.session_state[ver_key] = st.session_state.get(ver_key, 0) + 1
             st.session_state[f"_resultado_{hoja}"] = (
                 True, "Horas del Excel cargadas en la ficha. Revísalas y pulsa Guardar.")
-            st.rerun(scope="fragment")
+            _rehacer_ficha()
 
 
 @st.dialog("Revisa antes de guardar", width="large")
