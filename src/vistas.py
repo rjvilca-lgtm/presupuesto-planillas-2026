@@ -12,6 +12,7 @@ Foco de experiencia:
 """
 
 import re
+import unicodedata
 from html import escape
 from pathlib import Path
 
@@ -391,6 +392,27 @@ def _precargar_dictado(base: pd.DataFrame, prelim, guardado) -> int:
     return int(base.loc[acad & valor.notna(), "DNI"].nunique())
 
 
+def es_direccion(ceco, concepto) -> bool:
+    """Gestión de Dirección: solo para docentes con cargo de autoridad. Va en
+    el CECO '0' (o, en DMAT, como concepto del centro del departamento)."""
+    texto = unicodedata.normalize("NFKD", str(concepto)).encode("ascii", "ignore").decode()
+    return str(ceco).strip() == "0" or texto.strip().lower() == "gestion de direccion"
+
+
+def ordenar_direccion_al_final(ledger: pd.DataFrame) -> pd.DataFrame:
+    """Gestión de Dirección al final de cada docente (ficha y Excel), sin
+    cambiar el orden de los docentes ni del resto."""
+    if ledger.empty:
+        return ledger
+    rango = {d: i for i, d in enumerate(ledger["DNI"].drop_duplicates())}
+    clave = pd.DataFrame({
+        "d": ledger["DNI"].map(rango),
+        "z": [es_direccion(c, k) for c, k in zip(ledger["CENTRO_COSTO"], ledger["CONCEPTO"])],
+    }, index=ledger.index)
+    orden = clave.sort_values(["d", "z"], kind="stable").index
+    return ledger.loc[orden].reset_index(drop=True)
+
+
 def _semilla_ficha(roster: pd.DataFrame, estructura: pd.DataFrame,
                    guardado=None) -> pd.DataFrame:
     """Ledger inicial de la ficha: una fila por (docente, CECO, concepto),
@@ -434,7 +456,7 @@ def _semilla_ficha(roster: pd.DataFrame, estructura: pd.DataFrame,
         base["HORAS_META"] = base["DNI"].map(metas)
         base = base[_COLS_LEDGER]
     base["HORAS_META"] = base["HORAS_META"].map(meta_horas)
-    return base.reset_index(drop=True)
+    return ordenar_direccion_al_final(base.reset_index(drop=True))
 
 
 def _horas_plan(ledger: pd.DataFrame) -> pd.Series:
@@ -598,11 +620,15 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
             nonlocal total_docente
             with st.container(border=True, key=f"ceco_{estado_key}_{dni_sel}_{ceco}"):
                 cabecera = st.empty()
+                if str(ceco).strip() == "0":
+                    st.caption("Solo para docentes con cargo de autoridad (dirección, "
+                               "jefatura). Déjalo vacío en los demás.")
                 subtotal = 0.0
                 # Las académicas primero: las cronológicas se calculan de ellas
-                # en esta misma pasada.
-                filas = sorted(grupo.iterrows(), key=lambda par: not es_concepto(
-                    par[1]["CONCEPTO"], CONCEPTO_ACADEMICAS))
+                # en esta misma pasada. Gestión de Dirección, al final.
+                filas = sorted(grupo.iterrows(), key=lambda par: (
+                    not es_concepto(par[1]["CONCEPTO"], CONCEPTO_ACADEMICAS),
+                    es_direccion(ceco, par[1]["CONCEPTO"]) and str(ceco).strip() != "0"))
                 academicas = 0.0
                 for i in range(0, len(filas), CAMPOS_POR_FILA):
                     cols = st.columns(CAMPOS_POR_FILA, gap="medium")
@@ -652,7 +678,11 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
         # Clave por docente: al cambiar de docente el panel vuelve arriba
         with st.container(height=ALTO_PANEL, border=False,
                           key=f"detalle_{estado_key}_{dni_sel}"):
-            for ceco, grupo in sub.groupby("CENTRO_COSTO", sort=False):
+            # Gestión de Dirección (CECO '0') al final: pocos docentes la tienen.
+            # sorted es estable: el resto conserva su orden.
+            grupos = sorted(sub.groupby("CENTRO_COSTO", sort=False),
+                            key=lambda g: str(g[0]).strip() == "0")
+            for ceco, grupo in grupos:
                 _tarjeta_ceco(ceco, grupo)
 
         # Pasar al docente vecino sin volver a buscarlo en la lista

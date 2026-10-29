@@ -508,7 +508,9 @@ class RepositorioSQL:
                 "FROM CECO_CONCEPTO_TC t "
                 f"LEFT JOIN {catalogo} c ON c.CENTRO_COSTO = t.CENTRO_COSTO "
                 "WHERE t.DEPARTAMENTO = %s AND t.ACTIVO = 1 "
-                "ORDER BY t.CENTRO_COSTO, t.CONCEPTO", (origen,))
+                # Gestión de Dirección (CECO '0') al final
+                "ORDER BY CASE WHEN t.CENTRO_COSTO = '0' THEN 1 ELSE 0 END, "
+                "t.CENTRO_COSTO, t.CONCEPTO", (origen,))
         # Derivada de los borradores: cambia al guardar
         return self._leer_vivo(
             "SELECT DISTINCT LTRIM(RTRIM(de.CENTRO_COSTO)) AS CODIGO_CECO, "
