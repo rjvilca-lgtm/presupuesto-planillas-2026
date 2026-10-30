@@ -16,6 +16,7 @@ El estado vive en ESTADO_DEPARTAMENTO y CONFIG_PRESUPUESTO
 funciona sin bloqueos y lo avisa en la pestaña de administración.
 """
 
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from html import escape
@@ -566,6 +567,9 @@ def _admin_usuarios(repo, deptos: list[tuple], areas: list[tuple]):
                                        "ACTIVO": "Activo"}),
                  hide_index=True, width="stretch")
 
+    with st.expander("📋 Dar el mismo rol a varios correos a la vez"):
+        _admin_usuarios_lote(repo, usuarios, deptos, areas)
+
     with st.form("form_usuario", clear_on_submit=True):
         c1, c2, c3 = st.columns([3, 2, 3])
         email = c1.text_input("Correo", placeholder="nombre@ucsp.edu.pe")
@@ -589,4 +593,88 @@ def _admin_usuarios(repo, deptos: list[tuple], areas: list[tuple]):
             return
         repo.guardar_usuario(email, rol, depto if rol in ROLES_CON_CODIGO else None,
                              activo=bool(dar))
+        st.rerun()
+
+
+_CORREO = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def leer_correos(texto: str) -> tuple[list[str], list[str]]:
+    """Correos de una lista pegada (de Outlook o Gmail: «Nombre <correo>, ...»,
+    o uno por línea). Devuelve (correos @ucsp.edu.pe sin repetir, lo que no
+    sirve: correos de otro dominio o trozos sin correo)."""
+    validos, descartes = [], []
+    for trozo in re.split(r"[,;\n]+", texto or ""):
+        if not trozo.strip():
+            continue
+        encontrados = _CORREO.findall(trozo)
+        if not encontrados:
+            descartes.append(trozo.strip())
+        for c in encontrados:
+            c = c.lower()
+            if not c.endswith("@ucsp.edu.pe"):
+                descartes.append(c)
+            elif c not in validos:
+                validos.append(c)
+    return validos, descartes
+
+
+def _admin_usuarios_lote(repo, usuarios, deptos: list[tuple], areas: list[tuple]):
+    """Pegar una lista de correos y dar (o quitar) el mismo rol a todos."""
+    resultado = st.session_state.pop("_res_lote_usuarios", None)
+    if resultado:
+        st.success(resultado, icon="✅")
+    ver = st.session_state.get("_ver_lote_usuarios", 0)
+    texto = st.text_area(
+        "Pega los correos", key=f"lote_correos_{ver}", height=110,
+        placeholder="Ana Pérez <aperez@ucsp.edu.pe>, Luis Díaz <ldiaz@ucsp.edu.pe>, ... "
+                    "(como se copian de Outlook o Gmail, o uno por línea)")
+    c1, c2 = st.columns([2, 3])
+    rol = c1.selectbox("Rol para todos", list(ROLES), format_func=ROLES.get,
+                       key="lote_rol")
+    codigos = []
+    if rol in ROLES_CON_CODIGO:
+        lista = areas if rol == "AREA" else deptos
+        codigos = c2.multiselect(
+            "Área" if rol == "AREA" else "Departamento(s)", [c for c, _ in lista],
+            format_func=lambda c: f"{c} · {dict(lista)[c]}", key=f"lote_codigos_{rol}",
+            help="Si eliges varios, cada correo recibe el rol en cada uno.")
+    if not texto.strip():
+        return
+    correos, descartes = leer_correos(texto)
+    if descartes:
+        st.warning("No se tomarán en cuenta (no son correos @ucsp.edu.pe): "
+                   + ", ".join(descartes[:10]) + (" …" if len(descartes) > 10 else ""),
+                   icon="⚠️")
+    if not correos:
+        return
+    if rol in ROLES_CON_CODIGO and not codigos:
+        que = "el área" if rol == "AREA" else "el departamento"
+        st.info(f"Elige {que} para el rol {ROLES[rol]}.", icon="👆")
+        return
+    accesos = [(c, rol, d) for c in correos for d in (codigos or [None])]
+    activos = set()
+    if not usuarios.empty:
+        act = usuarios[usuarios["ACTIVO"].astype(bool)]
+        activos = set(zip(act["EMAIL"].str.lower(), act["ROL"],
+                          act["DEPARTAMENTO"].where(act["DEPARTAMENTO"].notna(), None)))
+    ya = sum(1 for a in accesos if a in activos)
+    destino = f" en {', '.join(codigos)}" if codigos else ""
+    st.caption(f"{len(correos)} correo(s) · rol {ROLES[rol]}{destino} · {len(accesos)} "
+               f"acceso(s), {ya} ya activo(s).")
+    b1, b2 = st.columns(2)
+    dar = b1.button(f"Dar acceso a {len(correos)} correo(s)", type="primary",
+                    width="stretch", key="btn_lote_dar")
+    quitar = b2.button(f"Quitar ese acceso a {len(correos)} correo(s)", width="stretch",
+                       key="btn_lote_quitar")
+    if dar or quitar:
+        try:
+            n = repo.guardar_usuarios(accesos, activo=bool(dar))
+        except Exception as ex:
+            st.error(f"No se cambió ningún acceso; se revirtió la operación. Detalle: {ex}")
+            return
+        st.session_state["_res_lote_usuarios"] = (
+            f"{'Acceso dado' if dar else 'Acceso quitado'}: {len(correos)} correo(s), "
+            f"rol {ROLES[rol]}{destino} ({n} registro(s)).")
+        st.session_state["_ver_lote_usuarios"] = ver + 1
         st.rerun()

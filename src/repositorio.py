@@ -254,6 +254,11 @@ class RepositorioDemo:
         self._usuarios.append({"EMAIL": email, "ROL": rol, "DEPARTAMENTO": departamento,
                                "ACTIVO": activo})
 
+    def guardar_usuarios(self, accesos, activo=True):
+        for email, rol, departamento in accesos:
+            self.guardar_usuario(email, rol, departamento, activo)
+        return len(accesos)
+
 
 # TIMEOUT_CONEXION: segundos que se espera a pytds antes de cortar a la
 # fuerza. pytds no siempre respeta su propio login_timeout durante el
@@ -1105,17 +1110,33 @@ class RepositorioSQL:
                              "AND HOJA_ORIGEN = %s AND ORIGEN = %s", (PRESUPUESTO, hoja, origen))
         return (df["EMAIL"].iloc[0], df["FECHA"].iloc[0]) if not df.empty else None
 
+    _SQL_USUARIO = (
+        "MERGE USUARIOS_PLANILLAS AS t "
+        "USING (SELECT %s AS EMAIL, %s AS ROL, %s AS DEPARTAMENTO) AS s "
+        "ON LOWER(t.EMAIL) = LOWER(s.EMAIL) AND t.ROL = s.ROL "
+        "AND ISNULL(t.DEPARTAMENTO, '') = ISNULL(s.DEPARTAMENTO, '') "
+        "WHEN MATCHED THEN UPDATE SET t.ACTIVO = %s "
+        "WHEN NOT MATCHED THEN INSERT (EMAIL, ROL, DEPARTAMENTO, ACTIVO) "
+        "VALUES (s.EMAIL, s.ROL, s.DEPARTAMENTO, %s);")
+
     def guardar_usuario(self, email: str, rol: str, departamento, activo: bool = True):
         """Alta o cambio de un acceso (EMAIL, ROL, DEPARTAMENTO)."""
-        self._escribir(
-            "MERGE USUARIOS_PLANILLAS AS t "
-            "USING (SELECT %s AS EMAIL, %s AS ROL, %s AS DEPARTAMENTO) AS s "
-            "ON LOWER(t.EMAIL) = LOWER(s.EMAIL) AND t.ROL = s.ROL "
-            "AND ISNULL(t.DEPARTAMENTO, '') = ISNULL(s.DEPARTAMENTO, '') "
-            "WHEN MATCHED THEN UPDATE SET t.ACTIVO = %s "
-            "WHEN NOT MATCHED THEN INSERT (EMAIL, ROL, DEPARTAMENTO, ACTIVO) "
-            "VALUES (s.EMAIL, s.ROL, s.DEPARTAMENTO, %s);",
-            [email.lower(), rol, departamento, activo, activo])
+        self._escribir(self._SQL_USUARIO, [email.lower(), rol, departamento, activo, activo])
+
+    def guardar_usuarios(self, accesos: list[tuple], activo: bool = True) -> int:
+        """Varios accesos (email, rol, departamento) en una sola transacción:
+        quedan todos o ninguno."""
+        with self._conn() as conn:
+            cur = conn.cursor()
+            try:
+                cur.executemany(self._SQL_USUARIO, [[e.lower(), r, d, activo, activo]
+                                                    for e, r, d in accesos])
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        _leer_corto.clear()
+        return len(accesos)
 
     def fijar_fecha_bloqueo(self, fecha):
         self._escribir(
