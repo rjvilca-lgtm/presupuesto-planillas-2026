@@ -287,6 +287,11 @@ def vista_resumen(repo, fl: Flujo, origen: str, ccos, roster, estructura):
                          disabled=bool(falta) or bloqueado, key=f"btn_cerrar_{origen}"):
                 _dialogo_cerrar(repo, origen)
 
+    with st.expander(f"🕘 Historial de guardados de {origen}"):
+        from .seguimiento import vista_historial
+        vista_historial(repo, repo.departamentos(), [], origenes=[origen], limite=100,
+                        filtros=False)
+
 
 @st.dialog("Valorizar departamento", width="large")
 def _dialogo_valorizar(repo, origen):
@@ -330,14 +335,35 @@ ROLES = {"DEPARTAMENTO": "Departamento", "INVESTIGACION": "Investigación (gesto
 # Roles que van con un código de departamento o de área
 ROLES_CON_CODIGO = ("DEPARTAMENTO", "INVESTIGACION", "AREA")
 
-def vista_admin(repo, fl: Flujo, deptos: list[tuple], usuario):
+SECCIONES_ADMIN = ["📊 Seguimiento", "🔒 Plazos y bloqueos", "👥 Usuarios",
+                   "🕘 Historial de guardados", "⚙️ Parámetros", "🧹 Limpiar datos 2027",
+                   "⏱ Rendimiento"]
+
+
+def vista_admin(repo, fl: Flujo, deptos: list[tuple], usuario, rendimiento=None):
     """Solo para usuarios con rol PRESUPUESTO (app.py no muestra la pestaña
-    a los demás)."""
+    a los demás). Una sub-pestaña por tarea; solo se dibuja (y consulta la
+    base) la que está abierta. rendimiento: la vista de tiempos de respuesta
+    (src/diagnostico.py), que app.py pasa para no importar en círculo."""
+    from .seguimiento import vista_historial, vista_seguimiento
     areas = repo.areas()
-    _admin_usuarios(repo, deptos, areas)
-    st.divider()
-    _admin_parametros(repo, usuario)
-    st.divider()
+    secciones = {
+        "📊 Seguimiento": lambda: vista_seguimiento(repo, fl, deptos, areas),
+        "🔒 Plazos y bloqueos": lambda: _admin_bloqueos(repo, fl, deptos, areas),
+        "👥 Usuarios": lambda: _admin_usuarios(repo, deptos, areas),
+        "🕘 Historial de guardados": lambda: vista_historial(repo, deptos, areas),
+        "⚙️ Parámetros": lambda: _admin_parametros(repo, usuario),
+        "🧹 Limpiar datos 2027": lambda: _admin_limpieza(repo, fl, deptos, usuario, areas),
+        "⏱ Rendimiento": rendimiento or (lambda: None),
+    }
+    tabs = st.tabs(SECCIONES_ADMIN, on_change="rerun", key="nav_admin")
+    for tab, nombre in zip(tabs, SECCIONES_ADMIN):
+        if tab.open:
+            with tab:
+                secciones[nombre]()
+
+
+def _admin_bloqueos(repo, fl: Flujo, deptos: list[tuple], areas: list[tuple]):
     if not fl.disponible:
         st.warning("Faltan las tablas del flujo. Ejecuta `sql/crear_estado_presupuesto.sql` "
                    "en Azure y recarga la página. Mientras tanto no hay bloqueos.", icon="⚠️")
@@ -395,9 +421,6 @@ def vista_admin(repo, fl: Flujo, deptos: list[tuple], usuario):
                "permite que DHUM, DMAT o DCN vuelvan a modificar; mientras no cierren de "
                "nuevo, la carga académica no se puede volver a valorizar.")
 
-    st.divider()
-    _admin_limpieza(repo, fl, deptos, usuario, areas)
-
 
 _PARTES_LIMPIEZA = {
     "BORRADORES": ("Borradores de las planillas",
@@ -409,7 +432,6 @@ _PARTES_LIMPIEZA = {
 
 
 def _admin_limpieza(repo, fl: Flujo, deptos: list[tuple], usuario, areas: list[tuple]):
-    st.subheader("Limpiar datos 2027")
     st.caption("Borra datos del presupuesto 2027, por ejemplo las pruebas, para dejar la app "
                "lista para producción: todo o por partes y por departamento. No toca los datos "
                "2026, catálogos, centros de costo, tarifas, parámetros, padrón, salarios, "
@@ -484,7 +506,6 @@ def _equivale(codigo: str, valor: float) -> str:
 
 
 def _admin_parametros(repo, usuario):
-    st.subheader("Parámetros de valorización 2027")
     st.caption("Cargas sociales y factor de grados que usan los procedimientos al valorizar. "
                "Se escriben como proporción: 0.1817 = 18.17 %. Un cambio se aplica a partir "
                "de la próxima valorización; los departamentos ya valorizados mantienen el "
@@ -542,7 +563,6 @@ def _admin_parametros(repo, usuario):
 
 
 def _admin_usuarios(repo, deptos: list[tuple], areas: list[tuple]):
-    st.subheader("Usuarios")
     st.caption("Quién puede entrar con su cuenta @ucsp.edu.pe y qué puede hacer. "
                "Presupuesto ve todo (salvo los salarios); DGA registra la carga académica; "
                "Desarrollo Humano mantiene docentes, horas, tarifas y salarios; "

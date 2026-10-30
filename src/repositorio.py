@@ -23,8 +23,16 @@ from contextlib import contextmanager
 import pandas as pd
 import streamlit as st
 
-from .config import (CARGA_ACADEMICA, CONCEPTO_ACADEMICAS, MESES, PLANILLAS,
-                     PRESUPUESTO, cfg_de, dims_fila)
+from .config import (CARGA_ACADEMICA, CONCEPTO_ACADEMICAS, HORAS_PLAN_TC, MESES, PLANILLAS,
+                     PRESUPUESTO, TOLERANCIA_HORAS, cfg_de, dims_fila)
+
+COLS_BITACORA = ["FECHA", "ORIGEN", "HOJA_ORIGEN", "EMAIL", "FILAS", "VALORIZADO"]
+
+
+def _hora_lima() -> datetime:
+    """Hora de Lima (UTC-5, sin horario de verano), como el resto de la app:
+    SYSDATETIME() en Azure es UTC."""
+    return datetime.now(timezone(timedelta(hours=-5))).replace(tzinfo=None, microsecond=0)
 
 # Columnas de DATOS_ENTRADA que se leen para retomar lo guardado
 COLS_ENTRADA = ["HOJA_ORIGEN", "DNI", "NOMBRE", "CENTRO_COSTO", "CONCEPTO", "CONCEPTO_2",
@@ -190,7 +198,39 @@ class RepositorioDemo:
         self._entrada[(hoja, origen)] = df.reindex(columns=COLS_ENTRADA).assign(HOJA_ORIGEN=hoja)
         if al_confirmar:
             al_confirmar(None)
+        from datetime import datetime
+        self._bitacora.append({"FECHA": datetime.now().replace(microsecond=0), "ORIGEN": origen,
+                               "HOJA_ORIGEN": hoja, "EMAIL": email, "FILAS": len(filas),
+                               "VALORIZADO": bool(sps)})
         return len(filas), None
+
+    _bitacora: list = []
+
+    def historial_guardados(self, origenes=None, limite=500) -> pd.DataFrame:
+        df = pd.DataFrame(self._bitacora, columns=COLS_BITACORA)
+        if origenes is not None:
+            df = df[df["ORIGEN"].isin(origenes)]
+        return df.sort_values("FECHA", ascending=False).head(limite).reset_index(drop=True)
+
+    def seguimiento(self) -> dict:
+        """Mismo formato que RepositorioSQL.seguimiento, con los datos en memoria."""
+        filas = [(o, h, len(df)) for (h, o), df in self._entrada.items() if len(df)]
+        planillas = pd.DataFrame(filas, columns=["ORIGEN", "HOJA_ORIGEN", "FILAS"])
+        docentes = []
+        for d, _ in self.departamentos():
+            padron = self.roster(d)
+            for h in ("1. Plan TC-I", "Plan TC-II"):
+                g = self._entrada.get((h, d))
+                horas = (g[g["CONCEPTO"] != CONCEPTO_ACADEMICAS].groupby("DNI")["HORAS"].sum()
+                         if g is not None and len(g) else pd.Series(dtype=float))
+                metas = padron.set_index("DNI")["HORAS_META"].fillna(HORAS_PLAN_TC)
+                h_doc = horas.reindex(metas.index).fillna(0.0)
+                docentes.append((d, h, len(metas), int((h_doc > 0).sum()),
+                                 int(((h_doc - metas).abs() <= TOLERANCIA_HORAS).sum())))
+        return {"planillas": planillas,
+                "docentes": pd.DataFrame(docentes, columns=["DPTO", "HOJA", "PADRON",
+                                                            "CON_HORAS", "COMPLETOS"]),
+                "montos": pd.DataFrame(columns=["DEPTO", "IMPORTE"])}
 
     def version_planilla(self, hoja, origen):
         return None
@@ -1093,6 +1133,58 @@ class RepositorioSQL:
             "SELECT EMAIL, ROL, DEPARTAMENTO, ACTIVO FROM USUARIOS_PLANILLAS "
             "ORDER BY EMAIL, ROL, DEPARTAMENTO")
 
+    def _hay_bitacora(self) -> bool:
+        """¿Existe BITACORA_GUARDADOS_2027 (sql/crear_bitacora_guardados_2027.sql)?"""
+        df = self._leer("SELECT OBJECT_ID('dbo.BITACORA_GUARDADOS_2027', 'U') AS ID")
+        return df["ID"].iloc[0] is not None
+
+    def historial_guardados(self, origenes=None, limite: int = 500) -> pd.DataFrame | None:
+        """Últimos guardados (más recientes primero). None si falta la tabla."""
+        if not self._hay_bitacora():
+            return None
+        filtro, params = "", [PRESUPUESTO]
+        if origenes is not None:
+            if not origenes:
+                return pd.DataFrame(columns=COLS_BITACORA)
+            filtro = f" AND ORIGEN IN ({', '.join(['%s'] * len(origenes))})"
+            params += list(origenes)
+        df = self._leer_vivo(
+            f"SELECT TOP {int(limite)} {', '.join(COLS_BITACORA)} FROM BITACORA_GUARDADOS_2027 "
+            f"WHERE PRESUPUESTO = %s{filtro} ORDER BY FECHA DESC, ID DESC", tuple(params))
+        df["VALORIZADO"] = df["VALORIZADO"].astype(bool)
+        return df
+
+    def seguimiento(self) -> dict:
+        """Datos del panel de seguimiento, para todos los departamentos a la vez:
+        planillas guardadas (filas por planilla), docentes TC del padrón con
+        horas y con sus horas completas por semestre, y monto valorizado 2027.
+        Solo conteos y totales: nada de nombres ni salarios."""
+        planillas = self._leer_vivo(
+            "SELECT ORIGEN, HOJA_ORIGEN, COUNT(*) AS FILAS FROM DATOS_ENTRADA "
+            "WHERE PRESUPUESTO = %s GROUP BY ORIGEN, HOJA_ORIGEN", (PRESUPUESTO,))
+        # Mismas reglas que la ficha: cuenta todo menos las horas académicas de
+        # dictado (ya entran convertidas) y la meta es la del padrón (40 si no hay)
+        docentes = self._leer_vivo(
+            "WITH padron AS (SELECT DPTO, DNI, MAX(HORAS) AS META FROM HORAS_DOCENTES "
+            "                GROUP BY DPTO, DNI), "
+            "hojas AS (SELECT '1. Plan TC-I' AS HOJA UNION ALL SELECT 'Plan TC-II'), "
+            "horas_plan AS (SELECT ORIGEN, HOJA_ORIGEN, DNI, SUM(HORAS) AS H FROM DATOS_ENTRADA "
+            "         WHERE PRESUPUESTO = %s AND HOJA_ORIGEN IN ('1. Plan TC-I', 'Plan TC-II') "
+            "         AND LTRIM(RTRIM(CONCEPTO)) <> %s GROUP BY ORIGEN, HOJA_ORIGEN, DNI) "
+            "SELECT p.DPTO, h.HOJA, COUNT(*) AS PADRON, "
+            "SUM(CASE WHEN ISNULL(pl.H, 0) > 0 THEN 1 ELSE 0 END) AS CON_HORAS, "
+            "SUM(CASE WHEN ABS(ISNULL(pl.H, 0) - CASE WHEN p.META > 0 THEN p.META "
+            "         ELSE %s END) <= %s THEN 1 ELSE 0 END) AS COMPLETOS "
+            "FROM padron p CROSS JOIN hojas h "
+            "LEFT JOIN horas_plan pl ON pl.ORIGEN = p.DPTO AND pl.HOJA_ORIGEN = h.HOJA "
+            "AND pl.DNI = p.DNI GROUP BY p.DPTO, h.HOJA",
+            (PRESUPUESTO, CONCEPTO_ACADEMICAS, float(HORAS_PLAN_TC), float(TOLERANCIA_HORAS)))
+        # AÑO es varchar: comparar con texto deja usar IX_PLANILLA_ANIO
+        montos = self._leer_vivo(
+            "SELECT ORIGEN_2 AS DEPTO, CAST(SUM(IMPORTE) AS float) AS IMPORTE FROM PLANILLA "
+            "WHERE AÑO = '2027' GROUP BY ORIGEN_2")
+        return {"planillas": planillas, "docentes": docentes, "montos": montos}
+
     def gestores_investigacion(self, depto: str) -> list[str]:
         """Correos con rol INVESTIGACION activo en el departamento: si hay
         alguno, la planilla de Investigación la registran ellos y el
@@ -1156,6 +1248,7 @@ class RepositorioSQL:
         nada de Streamlit en medio (ver borrador.versiones).
         Devuelve (filas, nueva versión o None)."""
         control = self._control_versiones()
+        bitacora = self._hay_bitacora()
         placeholders = ", ".join(["%s"] * len(cols))
         sql_insert = f"INSERT INTO DATOS_ENTRADA ({', '.join(cols)}) VALUES ({placeholders})"
         sql_delete = ("DELETE FROM DATOS_ENTRADA "
@@ -1196,10 +1289,7 @@ class RepositorioSQL:
                         cur.execute(f"EXEC {sp}")
                     print(f"[guardar] EXEC {sp} ok", flush=True)
                 if control:
-                    # Hora de Lima (UTC-5, sin horario de verano), como el resto de la
-                    # app: SYSDATETIME() en Azure es UTC
-                    lima = datetime.now(timezone(timedelta(hours=-5))).replace(
-                        tzinfo=None, microsecond=0)
+                    lima = _hora_lima()
                     cur.execute(
                         "MERGE GUARDADOS_2027 AS t USING (SELECT %s AS P, %s AS H, %s AS O) AS s "
                         "ON t.PRESUPUESTO = s.P AND t.HOJA_ORIGEN = s.H AND t.ORIGEN = s.O "
@@ -1208,6 +1298,13 @@ class RepositorioSQL:
                         "EMAIL, FECHA) VALUES (s.P, s.H, s.O, %s, %s, %s);",
                         [PRESUPUESTO, hoja, origen, actual + 1, email or "", lima,
                          actual + 1, email or "", lima])
+                if bitacora:
+                    cur.execute(
+                        "INSERT INTO BITACORA_GUARDADOS_2027 (PRESUPUESTO, HOJA_ORIGEN, ORIGEN, "
+                        "EMAIL, FECHA, FILAS, VERSION, VALORIZADO) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                        [PRESUPUESTO, hoja, origen, email, _hora_lima(), len(filas),
+                         actual + 1 if control else None, bool(sps)])
                 conn.commit()
                 nueva = actual + 1 if control else None
                 if al_confirmar:

@@ -106,8 +106,8 @@ def _main(contexto):
                          lambda: vista_reporte(repo, fl, usuario, repo.departamentos())))
     if usuario.presupuesto:
         pestañas.append(("Presupuesto · administración",
-                         lambda: (vista_admin(repo, fl, repo.departamentos(), usuario),
-                                  st.divider(), vista_diagnostico(repo))))
+                         lambda: vista_admin(repo, fl, repo.departamentos(), usuario,
+                                             lambda: vista_diagnostico(repo))))
     # Solo se ejecuta la pestaña abierta: las demás no consultan la base ni
     # dibujan nada hasta que se abren (lo editado y no guardado sigue en la sesión)
     tabs = st.tabs([t for t, _ in pestañas], on_change="rerun", key="nav_principal")
