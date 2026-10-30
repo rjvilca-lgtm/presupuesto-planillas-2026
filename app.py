@@ -88,7 +88,7 @@ def _main(contexto):
 
     # Cada rol ve solo sus pestañas; la consulta de carga académica, todos
     pestañas = []
-    if usuario.presupuesto or usuario.departamentos:
+    if usuario.presupuesto or usuario.departamentos or usuario.investigacion:
         pestañas.append(("Presupuesto por departamento",
                          lambda: vista_departamentos(repo, fl, usuario)))
     if usuario.presupuesto or usuario.areas:
@@ -99,9 +99,11 @@ def _main(contexto):
     if usuario.rrhh:
         pestañas.append(("Desarrollo Humano",
                          lambda: vista_desarrollo_humano(repo, usuario, repo.departamentos())))
-    pestañas.append(("Carga académica · consulta", lambda: consulta_carga_academica(repo, fl)))
-    pestañas.append(("Resumen de valorización",
-                     lambda: vista_reporte(repo, fl, usuario, repo.departamentos())))
+    if not usuario.solo_investigacion:   # el gestor de investigación solo registra
+        pestañas.append(("Carga académica · consulta",
+                         lambda: consulta_carga_academica(repo, fl)))
+        pestañas.append(("Resumen de valorización",
+                         lambda: vista_reporte(repo, fl, usuario, repo.departamentos())))
     if usuario.presupuesto:
         pestañas.append(("Presupuesto · administración",
                          lambda: (vista_admin(repo, fl, repo.departamentos(), usuario),
@@ -121,9 +123,11 @@ def _main(contexto):
 
 
 def vista_departamentos(repo, fl, usuario):
-    # Presupuesto ve todos los departamentos; los demás, solo los suyos
-    permitidos = None if usuario.presupuesto else usuario.departamentos
-    origen, seleccion = selector_contexto(repo, permitidos)
+    # Presupuesto ve todos los departamentos; los demás, solo los suyos (el
+    # gestor de investigación, solo la planilla de Investigación)
+    permitidos = None if usuario.presupuesto else list(
+        dict.fromkeys(usuario.departamentos + usuario.investigacion))
+    origen, seleccion = selector_contexto(repo, permitidos, usuario.planillas_de)
     st.session_state["_pantalla_detalle"] = f"{origen} · {seleccion}"
     panel_flujo(fl)
     solo_lectura = aviso_departamento(fl, origen)
@@ -160,6 +164,8 @@ def vista_departamentos(repo, fl, usuario):
 
     cfg = cfg_de(seleccion)
     st.caption(cfg["ayuda"])
+    if seleccion == INVESTIGACION:
+        solo_lectura = _aviso_investigacion(repo, usuario, origen) or solo_lectura
     roster = repo.roster(origen) if cfg["usa_roster"] else roster_vacio()
     tarifas = repo.tarifas(seleccion) if cfg["tarifa"] == "catalogo" else {}
     borrador.registrar_version(repo, seleccion, origen)
@@ -168,6 +174,33 @@ def vista_departamentos(repo, fl, usuario):
 
 
 AYUDANTIAS = "Ayudantias"
+INVESTIGACION = "Investigacion"
+
+
+def _aviso_investigacion(repo, usuario, origen) -> bool:
+    """Planilla de Investigación (sql/crear_rol_investigacion.sql): si el
+    departamento tiene gestor de investigación, la registra el gestor y el
+    departamento solo la ve y la valoriza desde Resumen. Devuelve si queda en
+    solo lectura para este usuario."""
+    gestores = repo.gestores_investigacion(origen)
+    ultimo = repo.ultimo_guardado(INVESTIGACION, origen)
+    from src.flujo import fmt
+    quien = (f" Último guardado: {ultimo[0] or '—'}, {fmt(ultimo[1])}." if ultimo else
+             " Aún no la ha guardado.")
+    if origen in usuario.investigacion and not usuario.presupuesto:
+        st.info("Registras la planilla de Investigación de este departamento. Guarda las "
+                "veces que quieras; el departamento la revisa y la valoriza." + quien,
+                icon="🔬")
+        return False
+    if gestores and not usuario.presupuesto:
+        st.info(f"La planilla de Investigación de {origen} la registra el gestor de "
+                f"investigación ({', '.join(gestores)}). Aquí puedes revisarla; para "
+                "valorizarla ve a «Resumen y valorización»." + quien, icon="🔬")
+        return True
+    if gestores:   # Presupuesto puede corregirla
+        st.caption(f"🔬 La registra el gestor de investigación ({', '.join(gestores)})."
+                   + quien)
+    return False
 
 
 def vista_areas(repo, fl, usuario):
@@ -360,6 +393,7 @@ def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guard
                        solo_lectura, usuario, sps=()):
     """Grilla matricial + feedback en vivo + guardado de borrador (con sps,
     además valoriza al guardar: las áreas de ayudantías)."""
+    gestor = usuario.planillas_de(origen) == [INVESTIGACION]
     _mostrar_resultado(hoja)
     # Claves de sesión de la grilla (ver vistas.grilla)
     borrador.mostrar_conflicto(hoja, origen, [f"_base_{hoja}_{origen}",
@@ -379,7 +413,8 @@ def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guard
                                  estricto=False)
     if hay_cambios and not solo_lectura and toca_autoguardar(clave):
         autoguardar(clave, f_actual, errores_de(),
-                    lambda: guardar_borrador(repo, hoja, origen, editado, usuario.email, sps))
+                    lambda: guardar_borrador(repo, hoja, origen, editado, usuario.email, sps,
+                                             gestor))
         hay_cambios = pendiente(clave, f_actual)
 
     st.divider()
@@ -392,7 +427,7 @@ def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guard
         else:
             with st.spinner("Guardando…"):
                 resultado = guardar_borrador(repo, hoja, origen, editado, usuario.email,
-                                             sps)
+                                             sps, gestor)
             if resultado[0]:
                 marcar_guardado(clave, f_actual)
             if resultado[0] or not borrador.hay_conflicto(hoja, origen):
@@ -400,7 +435,7 @@ def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guard
             st.rerun()
 
 
-def guardar_borrador(repo, hoja, origen, editado, email, sps=()):
+def guardar_borrador(repo, hoja, origen, editado, email, sps=(), gestor=False):
     """Guarda la planilla (sin valorizar, o valorizándola en la misma
     transacción si vienen sps). Devuelve (ok, mensaje). Si otra persona la
     guardó desde que esta sesión la abrió, no guarda: deja el aviso de
@@ -417,6 +452,9 @@ def guardar_borrador(repo, hoja, origen, editado, email, sps=()):
             marcar(repo, origen, FECHA_GUARDADO=momento, FECHA_VALORIZACION=momento)
             return True, f"{cfg['etiqueta']}: {n} registro(s) guardado(s) y valorizado(s)."
         marcar(repo, origen, FECHA_GUARDADO=ahora())
+        if gestor:   # el gestor de investigación no valoriza: lo hace el departamento
+            return True, (f"{cfg['etiqueta']}: {n} registro(s) guardado(s). El departamento "
+                          "ya puede revisarlos y valorizarlos.")
         return True, (f"{cfg['etiqueta']}: {n} registro(s) guardado(s). Cuando termines "
                       "todas tus planillas, valoriza desde «Resumen y valorización».")
     except ConflictoGuardado as c:

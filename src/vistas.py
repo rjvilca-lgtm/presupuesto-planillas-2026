@@ -145,9 +145,11 @@ ALTO_PANEL = 470
 CAMPOS_POR_FILA = 3
 
 
-def selector_contexto(repo, permitidos=None):
+def selector_contexto(repo, permitidos=None, planillas_de=None):
     """Departamento y planilla. permitidos: los departamentos del usuario
-    logueado (None = todos, para Presupuesto).
+    logueado (None = todos, para Presupuesto). planillas_de(depto): las
+    planillas que puede abrir ahí (None = todas; el gestor de investigación
+    solo la de Investigación).
     Las dos hojas TC (I y II semestre) se presentan como una sola opción
     "Plan de trabajo TC": app.py arma las pestañas por semestre a partir de
     TC_HOJAS. Las demás planillas siguen igual, una por una."""
@@ -165,6 +167,9 @@ def selector_contexto(repo, permitidos=None):
             [d[0] for d in deptos],
             format_func=lambda c: f"{c} · {dict(deptos)[c]}",
         )
+    solo = planillas_de(origen) if planillas_de else None
+    if solo is not None:
+        opciones = [h for h in opciones if h in solo]
     with col2:
         seleccion = st.selectbox(
             "Planilla", opciones, format_func=lambda h: etiquetas[h])

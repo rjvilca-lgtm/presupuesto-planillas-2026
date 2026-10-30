@@ -241,6 +241,13 @@ class RepositorioDemo:
     def listar_usuarios(self) -> pd.DataFrame:
         return pd.DataFrame(self._usuarios, columns=["EMAIL", "ROL", "DEPARTAMENTO", "ACTIVO"])
 
+    def gestores_investigacion(self, depto: str) -> list[str]:
+        return sorted(u["EMAIL"] for u in self._usuarios if u["ROL"] == "INVESTIGACION"
+                      and u["DEPARTAMENTO"] == depto and u.get("ACTIVO", True))
+
+    def ultimo_guardado(self, hoja: str, origen: str):
+        return None
+
     def guardar_usuario(self, email, rol, departamento, activo=True):
         self._usuarios = [u for u in self._usuarios if (u["EMAIL"], u["ROL"], u["DEPARTAMENTO"])
                           != (email, rol, departamento)]
@@ -1080,6 +1087,23 @@ class RepositorioSQL:
         return self._leer_vivo(
             "SELECT EMAIL, ROL, DEPARTAMENTO, ACTIVO FROM USUARIOS_PLANILLAS "
             "ORDER BY EMAIL, ROL, DEPARTAMENTO")
+
+    def gestores_investigacion(self, depto: str) -> list[str]:
+        """Correos con rol INVESTIGACION activo en el departamento: si hay
+        alguno, la planilla de Investigación la registran ellos y el
+        departamento solo la ve y la valoriza."""
+        df = self._leer_vivo(
+            "SELECT EMAIL FROM USUARIOS_PLANILLAS WHERE ROL = 'INVESTIGACION' "
+            "AND DEPARTAMENTO = %s AND ACTIVO = 1 ORDER BY EMAIL", (depto,))
+        return list(df["EMAIL"])
+
+    def ultimo_guardado(self, hoja: str, origen: str):
+        """(correo, fecha) del último guardado de la planilla, o None."""
+        if not self._control_versiones():
+            return None
+        df = self._leer_vivo("SELECT EMAIL, FECHA FROM GUARDADOS_2027 WHERE PRESUPUESTO = %s "
+                             "AND HOJA_ORIGEN = %s AND ORIGEN = %s", (PRESUPUESTO, hoja, origen))
+        return (df["EMAIL"].iloc[0], df["FECHA"].iloc[0]) if not df.empty else None
 
     def guardar_usuario(self, email: str, rol: str, departamento, activo: bool = True):
         """Alta o cambio de un acceso (EMAIL, ROL, DEPARTAMENTO)."""

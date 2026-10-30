@@ -323,8 +323,11 @@ def _dialogo_cerrar(repo, origen):
 
 # ---------------------------------------------------------- administración
 
-ROLES = {"DEPARTAMENTO": "Departamento", "AREA": "Área (ayudantías)", "DGA": "DGA",
+ROLES = {"DEPARTAMENTO": "Departamento", "INVESTIGACION": "Investigación (gestor)",
+         "AREA": "Área (ayudantías)", "DGA": "DGA",
          "DESARROLLO_HUMANO": "Desarrollo Humano", "PRESUPUESTO": "Presupuesto"}
+# Roles que van con un código de departamento o de área
+ROLES_CON_CODIGO = ("DEPARTAMENTO", "INVESTIGACION", "AREA")
 
 def vista_admin(repo, fl: Flujo, deptos: list[tuple], usuario):
     """Solo para usuarios con rol PRESUPUESTO (app.py no muestra la pestaña
@@ -542,7 +545,9 @@ def _admin_usuarios(repo, deptos: list[tuple], areas: list[tuple]):
     st.caption("Quién puede entrar con su cuenta @ucsp.edu.pe y qué puede hacer. "
                "Presupuesto ve todo (salvo los salarios); DGA registra la carga académica; "
                "Desarrollo Humano mantiene docentes, horas, tarifas y salarios; "
-               "Departamento registra las planillas de ese departamento; Área registra las "
+               "Departamento registra las planillas de ese departamento y las valoriza; "
+               "Investigación (gestor) registra solo la planilla de Investigación de ese "
+               "departamento, que el departamento revisa y valoriza; Área registra las "
                "ayudantías de esa área no académica.")
     try:
         usuarios = repo.listar_usuarios()
@@ -565,7 +570,7 @@ def _admin_usuarios(repo, deptos: list[tuple], areas: list[tuple]):
         c1, c2, c3 = st.columns([3, 2, 3])
         email = c1.text_input("Correo", placeholder="nombre@ucsp.edu.pe")
         rol = c2.selectbox("Rol", list(ROLES), format_func=ROLES.get)
-        depto = c3.selectbox("Departamento o área (roles Departamento y Área)",
+        depto = c3.selectbox("Departamento o área (roles Departamento, Investigación y Área)",
                              [d for d, _ in deptos] + [a for a, _ in areas],
                              format_func=lambda d: f"{d} · {nombres[d]}")
         b1, b2 = st.columns(2)
@@ -576,12 +581,12 @@ def _admin_usuarios(repo, deptos: list[tuple], areas: list[tuple]):
         if not email.endswith("@ucsp.edu.pe") or email.count("@") != 1:
             st.error("Ingresa un correo @ucsp.edu.pe válido.")
             return
-        if rol == "DEPARTAMENTO" and depto not in dict(deptos):
-            st.error("El rol Departamento va con un departamento, no con un área.")
+        if rol in ("DEPARTAMENTO", "INVESTIGACION") and depto not in dict(deptos):
+            st.error(f"El rol {ROLES[rol]} va con un departamento, no con un área.")
             return
         if rol == "AREA" and depto not in dict(areas):
             st.error("El rol Área va con un área no académica, no con un departamento.")
             return
-        repo.guardar_usuario(email, rol, depto if rol in ("DEPARTAMENTO", "AREA") else None,
+        repo.guardar_usuario(email, rol, depto if rol in ROLES_CON_CODIGO else None,
                              activo=bool(dar))
         st.rerun()

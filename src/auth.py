@@ -8,8 +8,11 @@ client_secret, server_metadata_url, redirect_uri, cookie_secret) y Authlib.
 Los permisos salen de USUARIOS_PLANILLAS (sql/crear_usuarios_planillas.sql):
 PRESUPUESTO ve todo y administra, DGA registra la carga académica,
 DESARROLLO_HUMANO mantiene docentes, horas, tarifas y salarios,
-DEPARTAMENTO registra las planillas de sus departamentos y AREA (áreas no
-académicas, sql/crear_areas_2027.sql) registra las ayudantías de su área.
+DEPARTAMENTO registra las planillas de sus departamentos, AREA (áreas no
+académicas, sql/crear_areas_2027.sql) registra las ayudantías de su área e
+INVESTIGACION (gestor de investigación, sql/crear_rol_investigacion.sql)
+registra solo la planilla de Investigación de sus departamentos; el
+departamento la revisa y la valoriza.
 
 Solo para probar en local, sin [auth]: [auth_dev] email = "..." en los
 secrets hace de usuario logueado. Nunca se usa si [auth] está configurado.
@@ -32,11 +35,24 @@ class Usuario:
     rrhh: bool = False   # Desarrollo Humano
     departamentos: list = field(default_factory=list)
     areas: list = field(default_factory=list)   # áreas no académicas (ayudantías)
+    investigacion: list = field(default_factory=list)   # gestor: planilla Investigación
 
     @property
     def tiene_acceso(self) -> bool:
         return (self.presupuesto or self.dga or self.rrhh or bool(self.departamentos)
-                or bool(self.areas))
+                or bool(self.areas) or bool(self.investigacion))
+
+    @property
+    def solo_investigacion(self) -> bool:
+        """Gestor de investigación sin otro rol: solo ve esa planilla."""
+        return bool(self.investigacion) and not (
+            self.presupuesto or self.dga or self.rrhh or self.departamentos or self.areas)
+
+    def planillas_de(self, depto: str) -> list | None:
+        """Planillas que puede abrir en el departamento (None = todas)."""
+        if self.presupuesto or depto in self.departamentos:
+            return None
+        return ["Investigacion"] if depto in self.investigacion else []
 
 
 def _secrets_tiene(seccion: str) -> bool:
@@ -144,6 +160,8 @@ def exigir_login(repo) -> Usuario:
             usuario.departamentos.append(f["DEPARTAMENTO"])
         elif f["ROL"] == "AREA" and f["DEPARTAMENTO"]:
             usuario.areas.append(f["DEPARTAMENTO"])
+        elif f["ROL"] == "INVESTIGACION" and f["DEPARTAMENTO"]:
+            usuario.investigacion.append(f["DEPARTAMENTO"])
 
     if not usuario.tiene_acceso:
         st.warning(f"Hola, {nombre}. Tu cuenta ({email}) aún no tiene acceso a la app. "
@@ -159,7 +177,7 @@ def barra_usuario(usuario: Usuario):
     roles = (["Presupuesto"] if usuario.presupuesto else []) + \
             (["DGA"] if usuario.dga else []) + \
             (["Desarrollo Humano"] if usuario.rrhh else []) + usuario.departamentos + \
-            usuario.areas
+            usuario.areas + [f"Investigación {d}" for d in usuario.investigacion]
     c_info, c_btn = st.columns([6, 1], vertical_alignment="center")
     c_info.caption(f"👤 {usuario.nombre} · {usuario.email} · {', '.join(roles)}")
     if c_btn.button("Cerrar sesión", width="stretch", key="btn_logout"):
