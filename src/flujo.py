@@ -570,6 +570,9 @@ def _admin_usuarios(repo, deptos: list[tuple], areas: list[tuple]):
     with st.expander("📋 Dar el mismo rol a varios correos a la vez"):
         _admin_usuarios_lote(repo, usuarios, deptos, areas)
 
+    with st.expander("👁 Probar la app como otro usuario"):
+        _probar_como(usuarios)
+
     with st.form("form_usuario", clear_on_submit=True):
         c1, c2, c3 = st.columns([3, 2, 3])
         email = c1.text_input("Correo", placeholder="nombre@ucsp.edu.pe")
@@ -594,6 +597,30 @@ def _admin_usuarios(repo, deptos: list[tuple], areas: list[tuple]):
         repo.guardar_usuario(email, rol, depto if rol in ROLES_CON_CODIGO else None,
                              activo=bool(dar))
         st.rerun()
+
+
+def _probar_como(usuarios):
+    """Ver la app con los permisos de otro correo (src/auth.py: probar como)."""
+    from .auth import empezar_a_probar
+    st.caption("Para revisar qué ve y qué puede hacer una persona. La app se abre con sus "
+               "permisos hasta que pulses «Volver a mi usuario». Lo que guardes en ese modo "
+               "queda a tu nombre. No se puede probar Desarrollo Humano (salarios). Se "
+               "descartan los cambios sin guardar de la sesión.")
+    activos = usuarios[usuarios["ACTIVO"].astype(bool)] if not usuarios.empty else usuarios
+    correos = sorted(set(activos["EMAIL"].str.lower())) if not activos.empty else []
+    if not correos:
+        st.info("Aún no hay usuarios activos.", icon="ℹ️")
+        return
+    roles = (activos.assign(R=activos["ROL"].map(ROLES) + activos["DEPARTAMENTO"].map(
+                 lambda d: f" {d}" if isinstance(d, str) else ""))
+             .groupby(activos["EMAIL"].str.lower())["R"].agg(", ".join))
+    c1, c2 = st.columns([4, 1], vertical_alignment="bottom")
+    como = c1.selectbox("Correo", correos, index=None, placeholder="Elige un usuario",
+                        format_func=lambda c: f"{c} · {roles.get(c, '')}",
+                        key="probar_como_correo")
+    if c2.button("Probar", type="primary", width="stretch", disabled=como is None,
+                 key="btn_probar_como"):
+        empezar_a_probar(como)
 
 
 _CORREO = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")

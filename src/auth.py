@@ -14,6 +14,11 @@ INVESTIGACION (gestor de investigación, sql/crear_rol_investigacion.sql)
 registra solo la planilla de Investigación de sus departamentos; el
 departamento la revisa y la valoriza.
 
+Probar como: un usuario PRESUPUESTO puede ver la app con los permisos de otro
+correo (Administración › Usuarios) para revisar qué ve y qué puede hacer.
+Nunca con el rol DESARROLLO_HUMANO (Presupuesto no ve salarios) y lo que se
+guarde queda con el correo real de quien prueba.
+
 Solo para probar en local, sin [auth]: [auth_dev] email = "..." en los
 secrets hace de usuario logueado. Nunca se usa si [auth] está configurado.
 """
@@ -36,6 +41,8 @@ class Usuario:
     departamentos: list = field(default_factory=list)
     areas: list = field(default_factory=list)   # áreas no académicas (ayudantías)
     investigacion: list = field(default_factory=list)   # gestor: planilla Investigación
+    probando_como: str | None = None   # correo cuyos permisos se están probando
+    sin_rrhh: bool = False             # se le quitó Desarrollo Humano al probar
 
     @property
     def tiene_acceso(self) -> bool:
@@ -148,7 +155,24 @@ def exigir_login(repo) -> Usuario:
         st.error("No se pudieron leer los permisos. Si es la primera vez, ejecuta "
                  "`sql/crear_usuarios_planillas.sql` en Azure.")
         st.stop()
-    usuario = Usuario(email=email, nombre=nombre)
+    usuario = _con_permisos(Usuario(email=email, nombre=nombre), filas)
+    como = st.session_state.get(PROBAR_COMO)
+    if como and usuario.presupuesto and como != email:
+        usuario = _probar_como(repo, usuario, como)
+
+    if not usuario.tiene_acceso:
+        st.warning(f"Hola, {nombre}. Tu cuenta ({email}) aún no tiene acceso a la app. "
+                   "Pide a la Oficina de Presupuesto que te registre.", icon="🔒")
+        if st.button("Cerrar sesión"):
+            _cerrar_sesion()
+        st.stop()
+    return usuario
+
+
+PROBAR_COMO = "_probar_como"
+
+
+def _con_permisos(usuario: Usuario, filas) -> Usuario:
     for f in filas.to_dict("records"):
         if f["ROL"] == "PRESUPUESTO":
             usuario.presupuesto = True
@@ -162,23 +186,56 @@ def exigir_login(repo) -> Usuario:
             usuario.areas.append(f["DEPARTAMENTO"])
         elif f["ROL"] == "INVESTIGACION" and f["DEPARTAMENTO"]:
             usuario.investigacion.append(f["DEPARTAMENTO"])
-
-    if not usuario.tiene_acceso:
-        st.warning(f"Hola, {nombre}. Tu cuenta ({email}) aún no tiene acceso a la app. "
-                   "Pide a la Oficina de Presupuesto que te registre.", icon="🔒")
-        if st.button("Cerrar sesión"):
-            _cerrar_sesion()
-        st.stop()
     return usuario
 
 
-def barra_usuario(usuario: Usuario):
-    """Nombre, rol y botón de cerrar sesión, arriba a la derecha."""
+def _probar_como(repo, real: Usuario, como: str) -> Usuario:
+    """Los permisos de otro correo, para que Presupuesto vea la app como esa
+    persona. El correo sigue siendo el real (lo guardado queda a su nombre) y
+    nunca incluye Desarrollo Humano: los salarios no se ven por esta vía."""
+    otro = _con_permisos(Usuario(email=real.email, nombre=real.nombre),
+                         repo.permisos_usuario(como))
+    otro.probando_como = como
+    otro.sin_rrhh, otro.rrhh = otro.rrhh, False
+    if not otro.tiene_acceso:
+        st.session_state.pop(PROBAR_COMO, None)
+        st.warning(f"{como} no tiene accesos que se puedan probar (sin roles activos, o "
+                   "solo Desarrollo Humano). Volviste a tu usuario.", icon="👁")
+        return real
+    return otro
+
+
+def empezar_a_probar(como: str | None):
+    """Cambia de usuario de prueba (None = volver al propio). Se limpia la
+    sesión para no mezclar pantallas ni borradores de un usuario con otro."""
+    for k in list(st.session_state.keys()):
+        del st.session_state[k]
+    if como:
+        st.session_state[PROBAR_COMO] = como
+    st.rerun()
+
+
+def roles_texto(usuario: Usuario) -> str:
     roles = (["Presupuesto"] if usuario.presupuesto else []) + \
             (["DGA"] if usuario.dga else []) + \
             (["Desarrollo Humano"] if usuario.rrhh else []) + usuario.departamentos + \
             usuario.areas + [f"Investigación {d}" for d in usuario.investigacion]
+    return ", ".join(roles)
+
+
+def barra_usuario(usuario: Usuario):
+    """Nombre, rol y botón de cerrar sesión, arriba a la derecha."""
+    if usuario.probando_como:
+        c_aviso, c_volver = st.columns([6, 1], vertical_alignment="center")
+        c_aviso.warning(
+            f"👁 **Estás probando la app como {usuario.probando_como}** "
+            f"({roles_texto(usuario)}). Ves y puedes hacer lo mismo que esa persona; lo que "
+            f"guardes queda a tu nombre ({usuario.email})."
+            + (" No incluye Desarrollo Humano." if usuario.sin_rrhh else ""))
+        if c_volver.button("Volver a mi usuario", type="primary", width="stretch",
+                           key="btn_dejar_de_probar"):
+            empezar_a_probar(None)
     c_info, c_btn = st.columns([6, 1], vertical_alignment="center")
-    c_info.caption(f"👤 {usuario.nombre} · {usuario.email} · {', '.join(roles)}")
+    c_info.caption(f"👤 {usuario.nombre} · {usuario.email} · {roles_texto(usuario)}")
     if c_btn.button("Cerrar sesión", width="stretch", key="btn_logout"):
         _cerrar_sesion()
