@@ -455,6 +455,16 @@ def _leer_corto(server, port, database, user, password,
     return _consultar(server, port, database, user, password, sql, params)
 
 
+# Valorización 2027 (PLANILLA): solo cambia al valorizar, al guardar las
+# ayudantías de un área (se valorizan al guardar), al importar DDH o al limpiar.
+# Se guarda 1 hora y se vacía en esos momentos, no con cada guardado (la
+# consulta trae ~9 mil filas y tarda unos segundos en Basic).
+@st.cache_data(ttl=3600, show_spinner=False)
+def _leer_valorizado(server, port, database, user, password,
+                     sql: str, params: tuple) -> pd.DataFrame:
+    return _consultar(server, port, database, user, password, sql, params)
+
+
 class RepositorioSQL:
     """Producción sobre Azure SQL. Requiere secrets['sql'].
 
@@ -661,6 +671,7 @@ class RepositorioSQL:
         ver lo recién cargado, no la copia cacheada."""
         _leer_cacheado.clear()
         _leer_corto.clear()
+        _leer_valorizado.clear()
 
     def limpiar_cache_trabajo(self):
         """Tras guardar o valorizar: solo cambian los borradores, la valorización
@@ -739,6 +750,8 @@ class RepositorioSQL:
         n, nueva = self.guardar(hoja, origen, filas, cols, list(sps), email=email,
                                 version=version, al_confirmar=al_confirmar)
         self.limpiar_cache_trabajo()
+        if sps:
+            _leer_valorizado.clear()
         return n, nueva
 
     def _control_versiones(self) -> bool:
@@ -774,6 +787,7 @@ class RepositorioSQL:
                 print(f"[valorizar] ROLLBACK por error: {e!r}", flush=True)
                 raise
         self.limpiar_cache_trabajo()
+        _leer_valorizado.clear()
 
     def estado_flujo(self):
         """(estados por departamento, fecha de bloqueo, tablas disponibles).
@@ -1095,22 +1109,23 @@ class RepositorioSQL:
             "ORDER BY a.ID DESC")
 
     def valorizacion(self, anio: int, origenes: list[str]) -> pd.DataFrame:
-        """Montos de PLANILLA por departamento (ORIGEN_2), planilla, partida,
-        centro de costo y mes. 2026 casi no cambia (caché de 10 min); 2027
-        cambia con cada valorización (caché corta)."""
+        """Montos de PLANILLA por departamento (ORIGEN_2) y planilla (ORIGEN).
+        2027: con partida, centro de costo y mes (el reporte los usa). Años
+        anteriores: solo el total por departamento y planilla, que es lo único
+        que el reporte compara; el detalle (26 mil filas) tardaba ~35 s en Basic,
+        el total menos de 1 s. Las columnas de detalle quedan vacías."""
+        cols = ["DEPTO", "ORIGEN", "PARTIDA", "DESCRIPCION", "CENTRO_COSTO", "MES", "IMPORTE"]
         if not origenes:
-            return pd.DataFrame(columns=["DEPTO", "ORIGEN", "PARTIDA", "DESCRIPCION",
-                                         "CENTRO_COSTO", "MES", "IMPORTE"])
+            return pd.DataFrame(columns=cols)
         if anio < 2027:
             # Una sola consulta con todos los departamentos, compartida por
-            # todos los usuarios (cada uno filtra lo suyo): se paga una vez
-            sql = ("SELECT p.ORIGEN_2 AS DEPTO, p.ORIGEN, p.PARTIDA, pp.Descripcion AS "
-                   "DESCRIPCION, p.CENTRO_COSTO, p.MES, CAST(SUM(p.IMPORTE) AS float) AS IMPORTE "
-                   "FROM PLANILLA p LEFT JOIN PartidaPresupuestal pp ON pp.Codigo = p.PARTIDA "
-                   "WHERE p.AÑO = CAST(%s AS varchar(20)) "
-                   "GROUP BY p.ORIGEN_2, p.ORIGEN, p.PARTIDA, pp.Descripcion, p.CENTRO_COSTO, p.MES")
+            # todos los usuarios (cada uno filtra lo suyo); medio día en memoria
+            sql = ("SELECT p.ORIGEN_2 AS DEPTO, p.ORIGEN, CAST(SUM(p.IMPORTE) AS float) AS IMPORTE "
+                   "FROM PLANILLA p WHERE p.AÑO = CAST(%s AS varchar(20)) "
+                   "GROUP BY p.ORIGEN_2, p.ORIGEN")
             todo = _leer_historico(self._server, self._port, self._database, self._user,
                                    self._password, sql, (str(anio),))
+            todo = todo.assign(PARTIDA="", DESCRIPCION="", CENTRO_COSTO=None, MES=None)[cols]
             return todo[todo["DEPTO"].isin(origenes)].reset_index(drop=True)
         marcas = ", ".join(["%s"] * len(origenes))
         sql = ("SELECT p.ORIGEN_2 AS DEPTO, p.ORIGEN, p.PARTIDA, pp.Descripcion AS DESCRIPCION, "
@@ -1120,7 +1135,8 @@ class RepositorioSQL:
                # (con un número SQL convierte toda la columna y la recorre entera)
                f"WHERE p.AÑO = CAST(%s AS varchar(20)) AND p.ORIGEN_2 IN ({marcas}) "
                "GROUP BY p.ORIGEN_2, p.ORIGEN, p.PARTIDA, pp.Descripcion, p.CENTRO_COSTO, p.MES")
-        return self._leer_vivo(sql, (str(anio), *origenes))
+        return _leer_valorizado(self._server, self._port, self._database, self._user,
+                                self._password, sql, (str(anio), *origenes))
 
     def permisos_usuario(self, email: str) -> pd.DataFrame:
         """Roles activos del correo (ver sql/crear_usuarios_planillas.sql)."""
