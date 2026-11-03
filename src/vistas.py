@@ -177,9 +177,16 @@ def selector_contexto(repo, permitidos=None, planillas_de=None):
     return origen, seleccion
 
 
-def hero(hoja: str, total_soles: float, horas: float, lineas: int, registros: int):
+def hero(hoja: str, total_soles: float, horas: float, lineas: int, registros: int,
+         ocultar_monto: bool = False):
+    """ocultar_monto: los costos de Puestos nuevos son reservados; quien los
+    registra ve cuántos puestos-mes lleva, no el importe."""
     cfg = cfg_de(hoja)
-    if cfg["tarifa"] == "server":
+    if ocultar_monto:
+        monto = f"{horas:,.0f} {cfg.get('unidad', 'unidades')}-mes"
+        nota = ("El costo lo calcula la Oficina de Presupuesto con la escala de "
+                "Desarrollo Humano.")
+    elif cfg["tarifa"] == "server":
         monto = f"{horas:,.0f} h"
         nota = "El importe en soles se calcula al valorizar en el sistema."
     else:

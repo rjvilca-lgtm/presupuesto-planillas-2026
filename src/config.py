@@ -243,6 +243,9 @@ PLANILLAS = {
         "unidad": "puestos",
         "formato_mes": "%.0f",
         "guardar_importe": True,       # IMPORTE = puestos × costo mensual
+        # El costo es reservado: solo lo ven Presupuesto y Desarrollo Humano
+        # (Desarrollo Humano lo modifica en su pestaña › Tarifas)
+        "montos_reservados": True,
         "dimensiones": ["CENTRO_COSTO", "TIPO", "CONCEPTO_2", "MES"],
         "etiquetas": {"TIPO": "Puesto", "CONCEPTO_2": "Justificación"},
         "tarifa": "catalogo",
@@ -252,8 +255,8 @@ PLANILLAS = {
         "ayuda": "Una fila por puesto: el centro de costo, el puesto (NUEVO, o UPGRADE si "
                  "es un ascenso: se presupuesta la diferencia de sueldo) y por qué se "
                  "necesita. En cada mes en que el puesto debe estar cubierto escribe 1 "
-                 "(o cuántos puestos iguales hacen falta). El costo mensual incluye "
-                 "sueldo, bonos y cargas sociales.",
+                 "(o cuántos puestos iguales hacen falta). El costo lo calcula la Oficina "
+                 "de Presupuesto con la escala de Desarrollo Humano.",
     },
 }
 

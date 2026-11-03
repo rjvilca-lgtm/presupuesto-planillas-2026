@@ -267,17 +267,24 @@ def vista_puestos(repo, fl, usuario):
                    "Presupuesto debe ejecutar `sql/crear_puestos_nuevos_2027.sql` y la "
                    "carga de costos en Azure.", icon="⚠️")
         return
-    with st.expander(f"💼 Costo mensual de cada puesto ({len(tarifas)})"):
+    if usuario.presupuesto or usuario.rrhh:   # los montos son reservados
+        _costos_puestos(tarifas)
+    entrada = repo.entrada(origen)
+    borrador.registrar_version(repo, PUESTOS_NUEVOS, origen)
+    _renderizar_grilla(repo, fl, PUESTOS_NUEVOS, cfg, ccos, roster_vacio(), tarifas, origen,
+                       entrada[entrada["HOJA_ORIGEN"] == PUESTOS_NUEVOS], solo_lectura, usuario)
+
+
+def _costos_puestos(tarifas):
+    with st.expander(f"💼 Costo mensual de cada puesto ({len(tarifas)}) · solo lo ven "
+                     "Presupuesto y Desarrollo Humano"):
         st.caption("Sueldo, bonos, Edenred y cargas sociales de un mes. En un UPGRADE "
                    "(ascenso) es solo la diferencia de sueldo con el puesto anterior, más "
                    "sus cargas.")
         st.dataframe(pd.DataFrame(list(tarifas.items()), columns=["Puesto", "Costo mensual"]),
                      hide_index=True, width="stretch", column_config={
                          "Costo mensual": st.column_config.NumberColumn(format="S/ %,.2f")})
-    entrada = repo.entrada(origen)
-    borrador.registrar_version(repo, PUESTOS_NUEVOS, origen)
-    _renderizar_grilla(repo, fl, PUESTOS_NUEVOS, cfg, ccos, roster_vacio(), tarifas, origen,
-                       entrada[entrada["HOJA_ORIGEN"] == PUESTOS_NUEVOS], solo_lectura, usuario)
+        st.caption("Desarrollo Humano los modifica en su pestaña › Tarifas.")
 
 
 def _mostrar_resultado(hoja, flotante=False):
@@ -468,7 +475,11 @@ def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guard
     total = estimar_importe(hoja, editado, tarifas)
     horas = total_horas(hoja, editado)
     lineas, registros = conteo(editado)
-    hero(hoja, total, horas, lineas, registros)
+    reservado = cfg.get("montos_reservados") and not (usuario.presupuesto or usuario.rrhh)
+    if reservado:   # puestos-mes: la suma de las celdas
+        from src.validacion import _matriz_valores
+        horas = float(_matriz_valores(editado).sum().sum()) if not editado.empty else 0.0
+    hero(hoja, total, horas, lineas, registros, ocultar_monto=reservado)
 
     clave = f"{hoja}|{origen}"
     f_actual = firma(editado, [c for c in editado.columns if c not in MESES], MESES)

@@ -148,6 +148,14 @@ class RepositorioDemo:
     def tarifas(self, hoja: str) -> dict:
         return dict(_TARIFAS_DEMO.get(hoja, {}))
 
+    def tarifas_todas(self) -> pd.DataFrame:
+        return pd.DataFrame([(h, t, v) for h, d in _TARIFAS_DEMO.items() for t, v in d.items()],
+                            columns=["HOJA_ORIGEN", "TIPO", "TARIFA"])
+
+    def guardar_tarifas(self, cambios: list[tuple], email: str):
+        for hoja, tipo, _, despues in cambios:
+            _TARIFAS_DEMO[hoja][tipo] = float(despues)
+
     def roster(self, origen: str) -> pd.DataFrame:
         filas = _ROSTER_DEMO.get(origen, [])
         return pd.DataFrame(filas, columns=["DNI", "NOMBRE"]).assign(HORAS_META=40.0)

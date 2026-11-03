@@ -266,29 +266,58 @@ def _valorizacion_ddh(repo, usuario):
 # ------------------------------------------------------------- tarifas
 
 def _tarifas(repo, usuario):
-    st.caption("Tarifas por hora 2027. Las usan Horas adicionales (como valor por defecto "
-               "de la tarifa), Ayudantías y la Carga académica. Un cambio se aplica a "
-               "partir de la próxima valorización.")
+    from .config import PUESTOS_NUEVOS
     _mostrar_resultado("_res_tarifas")
-    base = repo.tarifas_todas()
+    todas = repo.tarifas_todas()
+    es_puesto = todas["HOJA_ORIGEN"] == PUESTOS_NUEVOS
+
+    st.markdown("**Tarifas por hora**")
+    st.caption("Las usan Horas adicionales (como valor por defecto de la tarifa), "
+               "Ayudantías y la Carga académica. Un cambio se aplica a partir de la próxima "
+               "valorización.")
+    _editor_tarifas(repo, usuario, todas[~es_puesto].reset_index(drop=True), "horas",
+                    {"HOJA_ORIGEN": st.column_config.TextColumn("Planilla", disabled=True),
+                     "TIPO": st.column_config.TextColumn("Tipo", disabled=True),
+                     "TARIFA": st.column_config.NumberColumn("Tarifa (S/ por hora)",
+                                                             min_value=0.01, format="%.2f",
+                                                             required=True)},
+                    "Guardar tarifas por hora")
+
+    st.divider()
+    st.markdown("**Costo mensual de los puestos nuevos**")
+    st.caption("Sueldo, bonos, asignación familiar, bono por hijo, Edenred y cargas sociales "
+               "de un mes, por puesto. En un UPGRADE (ascenso) es solo la diferencia de "
+               "básico con el puesto anterior, más sus cargas. Los departamentos y áreas que "
+               "registran puestos no ven estos montos: solo eligen el puesto. El cambio se ve "
+               "en lo ya registrado la próxima vez que se guarde cada planilla de puestos.")
+    puestos = todas[es_puesto].reset_index(drop=True)
+    if puestos.empty:
+        st.info("Aún no hay costos de puestos cargados. La Oficina de Presupuesto debe "
+                "ejecutar sql/crear_puestos_nuevos_2027.sql y la carga de costos en Azure.",
+                icon="ℹ️")
+        return
+    _editor_tarifas(repo, usuario, puestos, "puestos",
+                    {"TIPO": st.column_config.TextColumn("Puesto", disabled=True,
+                                                         width="large"),
+                     "TARIFA": st.column_config.NumberColumn("Costo mensual (S/)",
+                                                             min_value=0.01, format="%,.2f",
+                                                             required=True)},
+                    "Guardar costos de puestos", orden=["TIPO", "TARIFA"])
+
+
+def _editor_tarifas(repo, usuario, base, nombre, columnas, boton, orden=None):
+    ver = f"_ver_tarifas_{nombre}"
     editado = st.data_editor(
-        base, hide_index=True, width="stretch", num_rows="fixed",
-        key=f"ed_tarifas_{st.session_state.get('_ver_tarifas', 0)}",
-        column_config={
-            "HOJA_ORIGEN": st.column_config.TextColumn("Planilla", disabled=True),
-            "TIPO": st.column_config.TextColumn("Tipo", disabled=True),
-            "TARIFA": st.column_config.NumberColumn("Tarifa (S/)", min_value=0.01,
-                                                    format="%.2f", required=True),
-        })
+        base, hide_index=True, width="stretch", num_rows="fixed", column_order=orden,
+        key=f"ed_tarifas_{nombre}_{st.session_state.get(ver, 0)}", column_config=columnas)
     cambios = [(b.HOJA_ORIGEN, b.TIPO, b.TARIFA, e.TARIFA)
                for b, e in zip(base.itertuples(), editado.itertuples())
                if pd.notna(e.TARIFA) and abs(float(e.TARIFA) - float(b.TARIFA)) > 1e-9]
-    if st.button("Guardar tarifas", type="primary", disabled=not cambios,
-                 key="btn_guardar_tarifas"):
+    if st.button(boton, type="primary", disabled=not cambios, key=f"btn_guardar_tarifas_{nombre}"):
         try:
             repo.guardar_tarifas(cambios, usuario.email)
-            st.session_state["_res_tarifas"] = (True, f"{len(cambios)} tarifa(s) actualizadas.")
-            st.session_state["_ver_tarifas"] = st.session_state.get("_ver_tarifas", 0) + 1
+            st.session_state["_res_tarifas"] = (True, f"{len(cambios)} valor(es) actualizado(s).")
+            st.session_state[ver] = st.session_state.get(ver, 0) + 1
         except Exception as ex:
             st.session_state["_res_tarifas"] = (False, f"No se guardó nada. Detalle: {ex}")
         st.rerun()
