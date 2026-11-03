@@ -27,6 +27,7 @@ from .config import (CARGA_ACADEMICA, CONCEPTO_ACADEMICAS, HORAS_PLAN_TC, MESES,
                      PRESUPUESTO, TOLERANCIA_HORAS, cfg_de, dims_fila)
 
 COLS_BITACORA = ["FECHA", "ORIGEN", "HOJA_ORIGEN", "EMAIL", "FILAS", "VALORIZADO"]
+COLS_CATALOGO = ["CENTRO_COSTO", "DESCRIPCION_CC", "DIRECCION", "DEPARTAMENTOS", "FICHA_TC", "FILAS_2027"]
 
 
 def _hora_lima() -> datetime:
@@ -273,6 +274,83 @@ class RepositorioDemo:
 
     def limpieza_disponible(self) -> bool:
         return False
+
+    # ------------------------------------------- Gestión de centros de costo
+    # En demo se modifican los mismos diccionarios que usan las planillas
+
+    _auditoria_cecos: list = []
+
+    def gestion_cecos_disponible(self) -> bool:
+        return True
+
+    def _catalogo_demo(self) -> dict:
+        cat = {}
+        for depto, lista in _CCOS_DEMO.items():
+            for c, d in lista:
+                cat.setdefault(c, [d, "FACULTAD DEMO"])
+        cat.update({c: [d, v] for c, (d, v) in getattr(self, "_cat_extra", {}).items()})
+        return cat
+
+    def catalogo_cecos(self) -> pd.DataFrame:
+        cat = self._catalogo_demo()
+        filas = []
+        for c, (d, v) in sorted(cat.items()):
+            deptos = sorted(k for k, lista in _CCOS_DEMO.items() if c in dict(lista))
+            ficha = sorted(k for k, m in _CECO_CONCEPTOS_DEMO.items() if c in m)
+            filas.append((c, d, v, ", ".join(deptos) or None, ", ".join(ficha) or None, 0))
+        return pd.DataFrame(filas, columns=COLS_CATALOGO)
+
+    def verificacion_cecos(self) -> dict:
+        cat = self._catalogo_demo()
+        sin = [(c, d, v) for c, (d, v) in cat.items()
+               if not any(c in dict(l) for l in _CCOS_DEMO.values())]
+        return {"sin_departamento": pd.DataFrame(sin, columns=["CENTRO_COSTO", "DESCRIPCION_CC",
+                                                              "DIRECCION"]),
+                "asignados_inexistentes": pd.DataFrame(columns=["DEPARTAMENTO", "CENTRO_COSTO"]),
+                "ficha_inexistentes": pd.DataFrame(columns=["DEPARTAMENTO", "CENTRO_COSTO", "CONCEPTOS"]),
+                "datos_fuera": pd.DataFrame(columns=["ORIGEN", "HOJA_ORIGEN", "CENTRO_COSTO", "FILAS",
+                                                     "PROBLEMA"]),
+                "deptos_sin_cecos": pd.DataFrame(
+                    [(d,) for d, _ in self.departamentos() if not _CCOS_DEMO.get(d)],
+                    columns=["DEPARTAMENTO"])}
+
+    def guardar_cecos(self, filas, asignar_a, email) -> dict:
+        extra = getattr(self, "_cat_extra", {})
+        cat = self._catalogo_demo()
+        nuevos = sum(1 for c, _, _ in filas if c not in cat)
+        cambiados = sum(1 for c, d, v in filas if c in cat and cat[c] != [d, v or cat[c][1]])
+        for c, d, v in filas:
+            extra[c] = (d, v or cat.get(c, [None, "FACULTAD DEMO"])[1])
+            for k, lista in _CCOS_DEMO.items():
+                _CCOS_DEMO[k] = [(x, d if x == c else y) for x, y in lista]
+        self._cat_extra = extra
+        n = self.asignar_cecos(asignar_a, [c for c, _, _ in filas], False, email)["hechos"] \
+            if asignar_a else 0
+        return {"nuevos": nuevos, "cambiados": cambiados, "asignaciones": n}
+
+    def asignar_cecos(self, deptos, codigos, quitar, email) -> dict:
+        cat, hechos = self._catalogo_demo(), 0
+        for depto in deptos:
+            lista = _CCOS_DEMO.setdefault(depto, [])
+            for c in codigos:
+                if quitar and c in dict(lista):
+                    lista.remove((c, dict(lista)[c])); hechos += 1
+                elif not quitar and c not in dict(lista) and c in cat:
+                    lista.append((c, cat[c][0])); hechos += 1
+        return {"hechos": hechos, "con_datos": []}
+
+    def agregar_ceco_ficha(self, depto, codigo, conceptos, email) -> int:
+        self.asignar_cecos([depto], [codigo], False, email)
+        actual = _CECO_CONCEPTOS_DEMO.setdefault(depto, {}).setdefault(codigo, [])
+        nuevos = [c for c in conceptos if c not in actual]
+        actual.extend(nuevos)
+        return len(nuevos)
+
+    def quitar_ceco_ficha(self, depto, codigo, email) -> int:
+        return len(_CECO_CONCEPTOS_DEMO.get(depto, {}).pop(codigo, []))
+
+    def auditoria_cecos(self) -> pd.DataFrame:
+        return pd.DataFrame(self._auditoria_cecos, columns=["FECHA", "EMAIL", "ACCION", "DETALLE"])
 
     def permisos_usuario(self, email: str) -> pd.DataFrame:
         filas = [u for u in self._usuarios if u["EMAIL"] == email and u.get("ACTIVO", True)]
@@ -1137,6 +1215,198 @@ class RepositorioSQL:
                "GROUP BY p.ORIGEN_2, p.ORIGEN, p.PARTIDA, pp.Descripcion, p.CENTRO_COSTO, p.MES")
         return _leer_valorizado(self._server, self._port, self._database, self._user,
                                 self._password, sql, (str(anio), *origenes))
+
+    # ------------------------------------------- Gestión de centros de costo
+    # sql/crear_gestion_cecos_2027.sql da los permisos de escritura y crea
+    # AUDITORIA_CECOS_2027. Solo la usa Presupuesto · administración.
+
+    def gestion_cecos_disponible(self) -> bool:
+        df = self._leer_vivo("SELECT OBJECT_ID('dbo.AUDITORIA_CECOS_2027', 'U') AS ID")
+        return df["ID"].iloc[0] is not None
+
+    def catalogo_cecos(self) -> pd.DataFrame:
+        """Catálogo 2027 con quién usa cada centro: departamentos que pueden
+        presupuestarlo, departamentos que lo tienen en la ficha TC y filas
+        guardadas en 2027."""
+        return self._leer_vivo(
+            "SELECT c.CENTRO_COSTO, c.DESCRIPCION_CC, c.DIRECCION, "
+            "(SELECT STRING_AGG(d.DEPARTAMENTO, ', ') WITHIN GROUP (ORDER BY d.DEPARTAMENTO) "
+            " FROM CECOS_DEPARTAMENTO_2027 d WHERE d.CENTRO_COSTO = c.CENTRO_COSTO) AS DEPARTAMENTOS, "
+            "(SELECT STRING_AGG(x.DEPARTAMENTO, ', ') WITHIN GROUP (ORDER BY x.DEPARTAMENTO) "
+            " FROM (SELECT DISTINCT t.DEPARTAMENTO FROM CECO_CONCEPTO_TC t "
+            "       WHERE t.CENTRO_COSTO = c.CENTRO_COSTO AND t.ACTIVO = 1) x) AS FICHA_TC, "
+            "(SELECT COUNT(*) FROM DATOS_ENTRADA e WHERE e.PRESUPUESTO = %s "
+            " AND e.CENTRO_COSTO = c.CENTRO_COSTO) AS FILAS_2027 "
+            "FROM CENTROS_COSTOS_2027 c ORDER BY c.CENTRO_COSTO", (PRESUPUESTO,))
+
+    def verificacion_cecos(self) -> dict:
+        """Lo que impide presupuestar o no cuadra entre catálogo, asignaciones,
+        ficha TC y lo guardado en 2027."""
+        leer = lambda sql, params=(): self._leer_vivo(sql, params)
+        return {
+            # Centros de una facultad que ningún departamento puede presupuestar
+            "sin_departamento": leer(
+                "SELECT c.CENTRO_COSTO, c.DESCRIPCION_CC, c.DIRECCION FROM CENTROS_COSTOS_2027 c "
+                "WHERE c.DIRECCION LIKE 'FACULTAD%%' AND NOT EXISTS (SELECT 1 FROM "
+                "CECOS_DEPARTAMENTO_2027 d WHERE d.CENTRO_COSTO = c.CENTRO_COSTO) "
+                "ORDER BY c.DIRECCION, c.CENTRO_COSTO"),
+            "asignados_inexistentes": leer(
+                "SELECT d.DEPARTAMENTO, d.CENTRO_COSTO FROM CECOS_DEPARTAMENTO_2027 d "
+                "WHERE NOT EXISTS (SELECT 1 FROM CENTROS_COSTOS_2027 c "
+                "WHERE c.CENTRO_COSTO = d.CENTRO_COSTO) ORDER BY 1, 2"),
+            # '0' es Gestión de Dirección: va sin centro de costo a propósito
+            "ficha_inexistentes": leer(
+                "SELECT t.DEPARTAMENTO, t.CENTRO_COSTO, STRING_AGG(CAST(t.CONCEPTO AS nvarchar(max)), "
+                "' | ') AS CONCEPTOS FROM CECO_CONCEPTO_TC t WHERE t.ACTIVO = 1 AND t.CENTRO_COSTO <> '0' "
+                "AND NOT EXISTS (SELECT 1 FROM CENTROS_COSTOS_2027 c WHERE c.CENTRO_COSTO = t.CENTRO_COSTO) "
+                "GROUP BY t.DEPARTAMENTO, t.CENTRO_COSTO ORDER BY 1, 2"),
+            "datos_fuera": leer(
+                "SELECT e.ORIGEN, e.HOJA_ORIGEN, e.CENTRO_COSTO, COUNT(*) AS FILAS, "
+                "CASE WHEN c.CENTRO_COSTO IS NULL THEN 'No existe en el catálogo 2027' "
+                "ELSE 'No está asignado al departamento' END AS PROBLEMA "
+                "FROM DATOS_ENTRADA e LEFT JOIN CENTROS_COSTOS_2027 c ON c.CENTRO_COSTO = e.CENTRO_COSTO "
+                "WHERE e.PRESUPUESTO = %s AND e.CENTRO_COSTO <> '0' "
+                "AND e.ORIGEN IN (SELECT CODIGO FROM Departamentos) "
+                "AND (c.CENTRO_COSTO IS NULL OR NOT EXISTS (SELECT 1 FROM CECOS_DEPARTAMENTO_2027 d "
+                "     WHERE d.DEPARTAMENTO = e.ORIGEN AND d.CENTRO_COSTO = e.CENTRO_COSTO)) "
+                # Los transversales del plan TC usan centros de otros departamentos
+                # que vienen de su ficha: no son un error
+                "AND NOT EXISTS (SELECT 1 FROM CECO_CONCEPTO_TC t WHERE t.DEPARTAMENTO = e.ORIGEN "
+                "     AND t.CENTRO_COSTO = e.CENTRO_COSTO AND t.ACTIVO = 1) "
+                "GROUP BY e.ORIGEN, e.HOJA_ORIGEN, e.CENTRO_COSTO, c.CENTRO_COSTO ORDER BY 1, 2, 3",
+                (PRESUPUESTO,)),
+            "deptos_sin_cecos": leer(
+                "SELECT d.CODIGO AS DEPARTAMENTO FROM Departamentos d WHERE NOT EXISTS "
+                "(SELECT 1 FROM CECOS_DEPARTAMENTO_2027 x WHERE x.DEPARTAMENTO = d.CODIGO) ORDER BY 1"),
+        }
+
+    def _auditar_ceco(self, cur, email, accion, detalle):
+        cur.execute("INSERT INTO AUDITORIA_CECOS_2027 (FECHA, EMAIL, ACCION, DETALLE) "
+                    "VALUES (%s, %s, %s, %s)", [_hora_lima(), email, accion, detalle])
+
+    def _en_transaccion_cecos(self, trabajo):
+        with self._conn() as conn:
+            cur = conn.cursor()
+            try:
+                resultado = trabajo(cur)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        self.limpiar_cache()   # catálogos: las planillas deben ver el cambio ya
+        return resultado
+
+    def guardar_cecos(self, filas: list[tuple], asignar_a: list[str], email: str) -> dict:
+        """Alta o corrección de centros (código, descripción, dirección; la
+        dirección vacía conserva la actual) y, si se pide, asignación a
+        departamentos. Todo o nada."""
+        def trabajo(cur):
+            nuevos = cambiados = asignados = 0
+            for codigo, desc, direccion in filas:
+                cur.execute("SELECT DESCRIPCION_CC, DIRECCION FROM CENTROS_COSTOS_2027 "
+                            "WHERE CENTRO_COSTO = %s", [codigo])
+                actual = cur.fetchone()
+                if actual is None:
+                    cur.execute("INSERT INTO CENTROS_COSTOS_2027 (CENTRO_COSTO, DESCRIPCION_CC, "
+                                "DIRECCION) VALUES (%s, %s, %s)", [codigo, desc, direccion])
+                    nuevos += 1
+                    self._auditar_ceco(cur, email, "CATALOGO ALTA",
+                                       f"{codigo} · {desc} · {direccion}")
+                elif (actual[0], actual[1]) != (desc, direccion or actual[1]):
+                    cur.execute("UPDATE CENTROS_COSTOS_2027 SET DESCRIPCION_CC = %s, "
+                                "DIRECCION = %s WHERE CENTRO_COSTO = %s",
+                                [desc, direccion or actual[1], codigo])
+                    cambiados += 1
+                    self._auditar_ceco(cur, email, "CATALOGO CAMBIO",
+                                       f"{codigo}: «{actual[0]} · {actual[1]}» → "
+                                       f"«{desc} · {direccion or actual[1]}»")
+                for depto in asignar_a:
+                    cur.execute("INSERT INTO CECOS_DEPARTAMENTO_2027 (DEPARTAMENTO, CENTRO_COSTO) "
+                                "SELECT %s, %s WHERE NOT EXISTS (SELECT 1 FROM "
+                                "CECOS_DEPARTAMENTO_2027 WHERE DEPARTAMENTO = %s AND "
+                                "CENTRO_COSTO = %s)", [depto, codigo, depto, codigo])
+                    if cur.rowcount:
+                        asignados += 1
+                        self._auditar_ceco(cur, email, "ASIGNAR", f"{depto} ← {codigo}")
+            return {"nuevos": nuevos, "cambiados": cambiados, "asignaciones": asignados}
+        return self._en_transaccion_cecos(trabajo)
+
+    def asignar_cecos(self, deptos: list[str], codigos: list[str], quitar: bool,
+                      email: str) -> dict:
+        """Asigna (o quita) centros a departamentos. No quita un centro en el
+        que el departamento ya tiene datos 2027: lo devuelve en con_datos."""
+        def trabajo(cur):
+            hechos, con_datos = 0, []
+            for depto in deptos:
+                for codigo in codigos:
+                    if quitar:
+                        cur.execute("SELECT COUNT(*) FROM DATOS_ENTRADA WHERE PRESUPUESTO = %s "
+                                    "AND ORIGEN = %s AND CENTRO_COSTO = %s",
+                                    [PRESUPUESTO, depto, codigo])
+                        if cur.fetchone()[0]:
+                            con_datos.append(f"{depto} · {codigo}")
+                            continue
+                        cur.execute("DELETE FROM CECOS_DEPARTAMENTO_2027 WHERE DEPARTAMENTO = %s "
+                                    "AND CENTRO_COSTO = %s", [depto, codigo])
+                    else:
+                        cur.execute("INSERT INTO CECOS_DEPARTAMENTO_2027 (DEPARTAMENTO, CENTRO_COSTO) "
+                                    "SELECT %s, %s WHERE EXISTS (SELECT 1 FROM CENTROS_COSTOS_2027 "
+                                    "WHERE CENTRO_COSTO = %s) AND NOT EXISTS (SELECT 1 FROM "
+                                    "CECOS_DEPARTAMENTO_2027 WHERE DEPARTAMENTO = %s AND "
+                                    "CENTRO_COSTO = %s)", [depto, codigo, codigo, depto, codigo])
+                    if cur.rowcount:
+                        hechos += 1
+                        self._auditar_ceco(cur, email, "QUITAR" if quitar else "ASIGNAR",
+                                           f"{depto} {'→' if quitar else '←'} {codigo}")
+            return {"hechos": hechos, "con_datos": con_datos}
+        return self._en_transaccion_cecos(trabajo)
+
+    def agregar_ceco_ficha(self, depto: str, codigo: str, conceptos: list[str],
+                           email: str) -> int:
+        """Agrega (o reactiva) conceptos de un centro en la ficha TC del
+        departamento; el centro queda asignado al departamento."""
+        def trabajo(cur):
+            n = 0
+            cur.execute("INSERT INTO CECOS_DEPARTAMENTO_2027 (DEPARTAMENTO, CENTRO_COSTO) "
+                        "SELECT %s, %s WHERE NOT EXISTS (SELECT 1 FROM CECOS_DEPARTAMENTO_2027 "
+                        "WHERE DEPARTAMENTO = %s AND CENTRO_COSTO = %s)",
+                        [depto, codigo, depto, codigo])
+            for concepto in conceptos:
+                cur.execute("UPDATE CECO_CONCEPTO_TC SET ACTIVO = 1 WHERE DEPARTAMENTO = %s AND "
+                            "CENTRO_COSTO = %s AND CONCEPTO = %s AND ACTIVO = 0",
+                            [depto, codigo, concepto])
+                n += cur.rowcount
+                cur.execute("INSERT INTO CECO_CONCEPTO_TC (DEPARTAMENTO, CENTRO_COSTO, CONCEPTO) "
+                            "SELECT %s, %s, %s WHERE NOT EXISTS (SELECT 1 FROM CECO_CONCEPTO_TC "
+                            "WHERE DEPARTAMENTO = %s AND CENTRO_COSTO = %s AND CONCEPTO = %s)",
+                            [depto, codigo, concepto, depto, codigo, concepto])
+                n += cur.rowcount
+            if n:
+                self._auditar_ceco(cur, email, "FICHA TC AGREGAR",
+                                   f"{depto} · {codigo}: {' | '.join(conceptos)}")
+            return n
+        return self._en_transaccion_cecos(trabajo)
+
+    def quitar_ceco_ficha(self, depto: str, codigo: str, email: str) -> int:
+        """Desactiva el centro en la ficha TC (no borra). Si el plan TC 2027
+        del departamento ya tiene horas ahí, no lo quita (devuelve -1)."""
+        def trabajo(cur):
+            cur.execute("SELECT COUNT(*) FROM DATOS_ENTRADA WHERE PRESUPUESTO = %s AND ORIGEN = %s "
+                        "AND CENTRO_COSTO = %s AND HOJA_ORIGEN IN ('1. Plan TC-I', 'Plan TC-II', "
+                        "'Plan TC Transversales')", [PRESUPUESTO, depto, codigo])
+            if cur.fetchone()[0]:
+                return -1
+            cur.execute("UPDATE CECO_CONCEPTO_TC SET ACTIVO = 0 WHERE DEPARTAMENTO = %s AND "
+                        "CENTRO_COSTO = %s AND ACTIVO = 1", [depto, codigo])
+            n = cur.rowcount
+            if n:
+                self._auditar_ceco(cur, email, "FICHA TC QUITAR", f"{depto} · {codigo}")
+            return n
+        return self._en_transaccion_cecos(trabajo)
+
+    def auditoria_cecos(self) -> pd.DataFrame:
+        return self._leer_vivo("SELECT TOP 200 FECHA, EMAIL, ACCION, DETALLE "
+                               "FROM AUDITORIA_CECOS_2027 ORDER BY ID DESC")
 
     def permisos_usuario(self, email: str) -> pd.DataFrame:
         """Roles activos del correo (ver sql/crear_usuarios_planillas.sql)."""

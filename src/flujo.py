@@ -336,8 +336,8 @@ ROLES = {"DEPARTAMENTO": "Departamento", "INVESTIGACION": "Investigación (gesto
 ROLES_CON_CODIGO = ("DEPARTAMENTO", "INVESTIGACION", "AREA")
 
 SECCIONES_ADMIN = ["📊 Seguimiento", "🔒 Plazos y bloqueos", "👥 Usuarios",
-                   "🕘 Historial de guardados", "⚙️ Parámetros", "🧹 Limpiar datos 2027",
-                   "⏱ Rendimiento"]
+                   "🏷 Centros de costo", "🕘 Historial de guardados", "⚙️ Parámetros",
+                   "🧹 Limpiar datos 2027", "⏱ Rendimiento"]
 
 
 def vista_admin(repo, fl: Flujo, deptos: list[tuple], usuario, rendimiento=None):
@@ -345,12 +345,14 @@ def vista_admin(repo, fl: Flujo, deptos: list[tuple], usuario, rendimiento=None)
     a los demás). Una sub-pestaña por tarea; solo se dibuja (y consulta la
     base) la que está abierta. rendimiento: la vista de tiempos de respuesta
     (src/diagnostico.py), que app.py pasa para no importar en círculo."""
+    from .cecos import vista_cecos
     from .seguimiento import vista_historial, vista_seguimiento
     areas = repo.areas()
     secciones = {
         "📊 Seguimiento": lambda: vista_seguimiento(repo, fl, deptos, areas),
         "🔒 Plazos y bloqueos": lambda: _admin_bloqueos(repo, fl, deptos, areas),
         "👥 Usuarios": lambda: _admin_usuarios(repo, deptos, areas),
+        "🏷 Centros de costo": lambda: vista_cecos(repo, deptos, usuario),
         "🕘 Historial de guardados": lambda: vista_historial(repo, deptos, areas),
         "⚙️ Parámetros": lambda: _admin_parametros(repo, usuario),
         "🧹 Limpiar datos 2027": lambda: _admin_limpieza(repo, fl, deptos, usuario, areas),

@@ -79,6 +79,14 @@ GRANT EXECUTE ON dbo.sp_Valorizar_CargaAcademica_2027   TO rol_app_planillas;
 -- Versiones de guardado (sql/crear_guardados_2027.sql), si ya existe
 IF OBJECT_ID('dbo.GUARDADOS_2027', 'U') IS NOT NULL
     GRANT SELECT, INSERT, UPDATE ON dbo.GUARDADOS_2027 TO rol_app_planillas;
+-- Gestión de centros de costo desde la app (sql/crear_gestion_cecos_2027.sql), si ya existe
+IF OBJECT_ID('dbo.AUDITORIA_CECOS_2027', 'U') IS NOT NULL
+BEGIN
+    GRANT SELECT, INSERT, UPDATE ON dbo.CENTROS_COSTOS_2027     TO rol_app_planillas;
+    GRANT SELECT, INSERT, DELETE ON dbo.CECOS_DEPARTAMENTO_2027 TO rol_app_planillas;
+    GRANT SELECT, INSERT, UPDATE ON dbo.CECO_CONCEPTO_TC        TO rol_app_planillas;
+    GRANT SELECT, INSERT         ON dbo.AUDITORIA_CECOS_2027    TO rol_app_planillas;
+END
 -- Historial de guardados (sql/crear_bitacora_guardados_2027.sql), si ya existe
 IF OBJECT_ID('dbo.BITACORA_GUARDADOS_2027', 'U') IS NOT NULL
     GRANT SELECT, INSERT ON dbo.BITACORA_GUARDADOS_2027 TO rol_app_planillas;
