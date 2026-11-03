@@ -17,8 +17,9 @@ import streamlit as st
 from . import borrador
 from .borrador import (autoguardar, firma, marcar_guardado, mostrar_indicador, pendiente,
                        toca_autoguardar)
-from .config import CARGA_ACADEMICA, PRESUPUESTO
+from .config import CARGA_ACADEMICA, FACTOR_CRONOLOGICAS, PRESUPUESTO
 from .flujo import DGA, ahora, marcar, panel_flujo
+from .vistas import formato_ceco, tabla_centros, zona_excel
 
 CA = CARGA_ACADEMICA
 CONCEPTOS = list(CA["conceptos"])
@@ -64,7 +65,7 @@ def _colcfg(ccos: pd.DataFrame, editable: bool) -> dict:
             "Semestre", options=CA["semestres"], required=True, disabled=not editable),
         "CENTRO_COSTO": st.column_config.SelectboxColumn(
             "Centro de costo", options=ccos["CODIGO_CECO"].tolist(), required=True,
-            width="medium", disabled=not editable),
+            width="large", disabled=not editable, format_func=formato_ceco(ccos)),
         "DESCRIPCION_CECO": st.column_config.TextColumn("Descripción", width="large"),
     }
     for c, etiqueta in CA["conceptos"].items():
@@ -149,6 +150,8 @@ def registro_carga_academica(repo, fl, usuario=None):
         hide_index=True, width="stretch", column_order=COLS_GRILLA,
         column_config=_colcfg(ccos, True), key=widget_key)
     st.session_state["_ultimo_carga_academica"] = editado
+    tabla_centros(ccos, "🏷 Centros de costo 2027")
+    _excel_carga(editado, ccos, bloqueado)
 
     clave, f_actual = "carga_academica", firma(editado, ["MES", "CENTRO_COSTO"], CONCEPTOS)
     hay_cambios = pendiente(clave, f_actual)
@@ -206,6 +209,98 @@ def registro_carga_academica(repo, fl, usuario=None):
         c_valorizar.caption("Para valorizar faltan cerrar: " + ", ".join(pendientes) + ".")
     elif fl.cambios_sin_valorizar(DGA):
         c_valorizar.caption("Hay cambios guardados sin valorizar.")
+
+    st.divider()
+    horas_dictado_por_departamento(repo)
+
+
+def _excel_carga(editado, ccos, bloqueado):
+    """Plantilla Excel de la carga académica (src/plantilla_grilla.py)."""
+    from .plantilla_grilla import Columna
+    columnas = ([Columna("MES", "Semestre", "lista", CA["semestres"], ancho=12,
+                         obligatoria=True),
+                 Columna("CENTRO_COSTO", "Centro de costo", "lista", ancho=18,
+                         obligatoria=True)]
+                + [Columna(c, e, "numero", ancho=16) for c, e in CA["conceptos"].items()])
+    nuevo = zona_excel(
+        "carga_academica_2027.xlsx", columnas, editado, ccos, "Carga académica 2027 · DGA",
+        "Una fila por semestre y centro de costo. Elige el semestre y el centro con la flecha "
+        "de la celda y escribe las horas de titulares, jefes de práctica y asistentes. "
+        "Puedes agregar filas debajo. Al cargarlo, las filas del archivo reemplazan a las de "
+        "la pantalla; revisa y pulsa Guardar.", "carga_academica", bloqueado)
+    if nuevo is None:
+        return
+    nuevo = nuevo[COLS_GRILLA].reset_index(drop=True)
+    st.session_state["_base_carga_academica"] = nuevo
+    st.session_state["_ultimo_carga_academica"] = nuevo
+    st.session_state["_ver_carga_academica"] = st.session_state.get("_ver_carga_academica", 0) + 1
+    st.session_state["_resultado_carga_academica"] = (
+        True, f"{len(nuevo)} fila(s) del Excel cargadas. Revísalas y pulsa Guardar.")
+    st.rerun()
+
+
+def horas_dictado_por_departamento(repo):
+    """Para la DGA: horas académicas de dictado de pregrado que cada
+    departamento asignó a sus docentes TC en los planes de trabajo 2027 (las
+    mismas que se restan de las horas de titulares al valorizar)."""
+    st.subheader("Horas de dictado de pregrado asignadas en los planes TC")
+    st.caption("Lo que cada departamento registró hasta ahora como «Horas Dictado Pregrado "
+               "(académicas)» de sus docentes a tiempo completo, por semestre. Cambia cada "
+               "vez que un departamento guarda su plan TC.")
+    dtc = repo.horas_dtc()
+    dtc = dtc.assign(HORAS=pd.to_numeric(dtc["HORAS"], errors="coerce").fillna(0.0))
+    dtc = dtc[dtc["HORAS"] > 0]
+    if dtc.empty:
+        st.info("Aún no hay planes TC 2027 guardados con horas académicas de dictado.",
+                icon="ℹ️")
+        return
+    sems = CA["semestres"]
+    filas = []
+    for depto, g in dtc.groupby("ORIGEN"):
+        fila = {"Departamento": depto}
+        for sem in sems:
+            s = g[g["MES"] == sem]
+            fila[f"Docentes {sem}"] = int(s["DNI"].nunique())
+            fila[f"Horas académicas {sem}"] = float(s["HORAS"].sum())
+        filas.append(fila)
+    df = pd.DataFrame(filas)
+    df["Horas académicas (I + II)"] = df[[f"Horas académicas {s}" for s in sems]].sum(axis=1)
+    df["Horas cronológicas (I + II)"] = df["Horas académicas (I + II)"] * FACTOR_CRONOLOGICAS
+    total = {"Departamento": "TOTAL",
+             **{c: df[c].sum() for c in df.columns if c != "Departamento"}}
+    for sem in sems:   # un docente puede dictar en varios departamentos: sin repetir
+        total[f"Docentes {sem}"] = int(dtc.loc[dtc["MES"] == sem, "DNI"].nunique())
+    df = pd.concat([df, pd.DataFrame([total])], ignore_index=True)
+    columnas = st.columns(len(sems) + 1)
+    for col, sem in zip(columnas, sems):
+        col.metric(f"Horas académicas {sem}", f"{total[f'Horas académicas {sem}']:,.1f}")
+    columnas[-1].metric("Departamentos con horas", f"{len(df) - 1}")
+    st.dataframe(df, hide_index=True, width="stretch", column_config={
+        c: st.column_config.NumberColumn(format="%,.1f") for c in df.columns
+        if c.startswith("Horas")})
+
+    with st.expander("Ver por centro de costo y docente"):
+        elegido = st.selectbox("Departamento", sorted(dtc["ORIGEN"].dropna().unique()),
+                               key="dga_dictado_depto")
+        sub = dtc[dtc["ORIGEN"] == elegido]
+        cc = repo.todos_centros_costo()
+        desc = dict(zip(cc["CODIGO_CECO"], cc["DESCRIPCION_CECO"]))
+        por_ceco = (sub.groupby(["MES", "CENTRO_COSTO"])
+                       .agg(Docentes=("DNI", "nunique"), Horas=("HORAS", "sum")).reset_index())
+        por_ceco.insert(2, "Descripción", por_ceco["CENTRO_COSTO"].map(desc))
+        st.dataframe(por_ceco.rename(columns={"MES": "Semestre",
+                                              "CENTRO_COSTO": "Centro de costo"}),
+                     hide_index=True, width="stretch", column_config={
+                         "Horas": st.column_config.NumberColumn("Horas académicas",
+                                                                format="%,.2f")})
+        st.dataframe(sub.sort_values(["MES", "NOMBRE", "CENTRO_COSTO"])[
+                         ["MES", "NOMBRE", "CENTRO_COSTO", "HORAS"]],
+                     hide_index=True, width="stretch", column_config={
+                         "MES": st.column_config.TextColumn("Semestre"),
+                         "NOMBRE": st.column_config.TextColumn("Docente"),
+                         "CENTRO_COSTO": st.column_config.TextColumn("Centro de costo"),
+                         "HORAS": st.column_config.NumberColumn("Horas académicas",
+                                                                format="%,.2f")})
 
 
 @st.dialog("Revisa antes de guardar", width="large")

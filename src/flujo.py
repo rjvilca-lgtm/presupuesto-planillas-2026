@@ -24,7 +24,7 @@ from html import escape
 import pandas as pd
 import streamlit as st
 
-from .config import CARGA_ACADEMICA, DEPTOS_PRIMERO, PLANILLAS, cfg_de
+from .config import CARGA_ACADEMICA, DEPTOS_PRIMERO, cfg_de, planillas_departamento
 from .repositorio import matriz_desde_entrada, sps_departamento
 from .validacion import estimar_importe, formato_soles, total_horas, validar
 
@@ -235,7 +235,7 @@ def vista_resumen(repo, fl: Flujo, origen: str, ccos, roster, estructura):
     entrada = repo.entrada(origen)
     ccos_dep = set(ccos["CODIGO_CECO"])
     filas_tabla, observaciones = [], {}
-    for hoja, cfg in PLANILLAS.items():
+    for hoja, cfg in planillas_departamento().items():
         filas = entrada[entrada["HOJA_ORIGEN"] == hoja]
         if filas.empty:
             filas_tabla.append((cfg["etiqueta"], 0, "—", "Sin datos"))
@@ -330,10 +330,10 @@ def _dialogo_cerrar(repo, origen):
 # ---------------------------------------------------------- administración
 
 ROLES = {"DEPARTAMENTO": "Departamento", "INVESTIGACION": "Investigación (gestor)",
-         "AREA": "Área (ayudantías)", "DGA": "DGA",
+         "AREA": "Área (ayudantías)", "PUESTOS": "Puestos nuevos", "DGA": "DGA",
          "DESARROLLO_HUMANO": "Desarrollo Humano", "PRESUPUESTO": "Presupuesto"}
 # Roles que van con un código de departamento o de área
-ROLES_CON_CODIGO = ("DEPARTAMENTO", "INVESTIGACION", "AREA")
+ROLES_CON_CODIGO = ("DEPARTAMENTO", "INVESTIGACION", "AREA", "PUESTOS")
 
 SECCIONES_ADMIN = ["📊 Seguimiento", "🔒 Plazos y bloqueos", "👥 Usuarios",
                    "🏷 Centros de costo", "🕘 Historial de guardados", "⚙️ Parámetros",
@@ -599,7 +599,8 @@ def _admin_usuarios(repo, deptos: list[tuple], areas: list[tuple]):
         c1, c2, c3 = st.columns([3, 2, 3])
         email = c1.text_input("Correo", placeholder="nombre@ucsp.edu.pe")
         rol = c2.selectbox("Rol", list(ROLES), format_func=ROLES.get)
-        depto = c3.selectbox("Departamento o área (roles Departamento, Investigación y Área)",
+        depto = c3.selectbox("Departamento o área (roles Departamento, Investigación, Área "
+                             "y Puestos nuevos)",
                              [d for d, _ in deptos] + [a for a, _ in areas],
                              format_func=lambda d: f"{d} · {nombres[d]}")
         b1, b2 = st.columns(2)
@@ -683,9 +684,11 @@ def _admin_usuarios_lote(repo, usuarios, deptos: list[tuple], areas: list[tuple]
                        key="lote_rol")
     codigos = []
     if rol in ROLES_CON_CODIGO:
-        lista = areas if rol == "AREA" else deptos
+        lista = (areas if rol == "AREA" else
+                 list(deptos) + list(areas) if rol == "PUESTOS" else deptos)
         codigos = c2.multiselect(
-            "Área" if rol == "AREA" else "Departamento(s)", [c for c, _ in lista],
+            {"AREA": "Área", "PUESTOS": "Departamento(s) o área(s)"}.get(rol, "Departamento(s)"),
+            [c for c, _ in lista],
             format_func=lambda c: f"{c} · {dict(lista)[c]}", key=f"lote_codigos_{rol}",
             help="Si eliges varios, cada correo recibe el rol en cada uno.")
     if not texto.strip():

@@ -22,7 +22,7 @@ import streamlit as st
 from .repositorio import matriz_desde_entrada
 from .config import (CONCEPTO_ACADEMICAS, CONCEPTO_CRONOLOGICAS, FACTOR_CRONOLOGICAS,
                      HORAS_PLAN_TC, MESES, MESES_ABBR, SEMESTRES, TOLERANCIA_HORAS,
-                     a_hhmm, cfg_de, de_hhmm, dims_fila, es_concepto, meta_horas)
+                     a_hhmm, cfg_de, de_hhmm, dims_fila, es_concepto, etiqueta_dim, meta_horas)
 from .validacion import formato_soles
 
 
@@ -153,7 +153,8 @@ def selector_contexto(repo, permitidos=None, planillas_de=None):
     Las dos hojas TC (I y II semestre) se presentan como una sola opción
     "Plan de trabajo TC": app.py arma las pestañas por semestre a partir de
     TC_HOJAS. Las demás planillas siguen igual, una por una."""
-    from .config import PLANILLAS
+    from .config import planillas_departamento
+    PLANILLAS = planillas_departamento()
     deptos = repo.departamentos()
     if permitidos is not None:
         deptos = [d for d in deptos if d[0] in set(permitidos)]
@@ -270,7 +271,7 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
     ccos_opts = ccos["CODIGO_CECO"].tolist()
     dims = dims_fila(cfg)
     metrica = cfg["metrica"]
-    unidad = "horas" if metrica == "HORAS" else "importe (S/)"
+    unidad = cfg.get("unidad") or ("horas" if metrica == "HORAS" else "importe (S/)")
     semestre = _semestre_activo(hoja)
     meses_visibles = SEMESTRES[semestre]
 
@@ -278,11 +279,16 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
         "DNI": st.column_config.TextColumn("DNI", disabled=cfg["usa_roster"]),
         "NOMBRE": st.column_config.TextColumn("Docente", disabled=cfg["usa_roster"],
                                               width="medium"),
+        # Código y descripción: los centros 2027 son nuevos y no todos los conocen
         "CENTRO_COSTO": st.column_config.SelectboxColumn(
-            "Centro de costo", options=ccos_opts, required=True, width="medium",
-            help="Solo aparecen los centros de costo de tu departamento."),
-        "CONCEPTO": st.column_config.TextColumn("Concepto"),
-        "CONCEPTO_2": st.column_config.TextColumn("Detalle"),
+            "Centro de costo", options=ccos_opts, required=True, width="large",
+            format_func=formato_ceco(ccos),
+            help="Solo aparecen los centros de costo de tu departamento o área. "
+                 "La lista completa con descripción está debajo de la grilla."),
+        "CONCEPTO": st.column_config.TextColumn(etiqueta_dim(cfg, "CONCEPTO", "Concepto")),
+        "CONCEPTO_2": st.column_config.TextColumn(
+            etiqueta_dim(cfg, "CONCEPTO_2", "Detalle"),
+            width="large" if "CONCEPTO_2" in cfg.get("etiquetas", {}) else None),
     }
     if cfg.get("precarga"):
         precarga = _leer_precarga(cfg["precarga"])
@@ -293,7 +299,8 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
                     titulo, options=sorted(precarga[col].unique()), width="medium")
     if cfg["tarifa"] == "catalogo":
         colcfg[cfg["catalogo_key"]] = st.column_config.SelectboxColumn(
-            "Tipo", options=list(tarifas), required=True,
+            etiqueta_dim(cfg, cfg["catalogo_key"], "Tipo"), options=list(tarifas),
+            required=True, width="large" if cfg.get("etiquetas") else None,
             help="La tarifa se aplica sola según el tipo. No se teclea el precio."
             if not cfg.get("tarifa_editable") else
             "Al elegir el tipo se llena la tarifa 2027; puedes cambiarla.")
@@ -307,7 +314,7 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
             help="Se llena con la tarifa 2027 del tipo elegido. Puedes cambiarla.")
 
     # columnas de mes (encabezado corto para ver más meses a la vez)
-    fmt = "%.1f" if metrica == "HORAS" else "%.2f"
+    fmt = cfg.get("formato_mes") or ("%.1f" if metrica == "HORAS" else "%.2f")
     for m in MESES:
         colcfg[m] = st.column_config.NumberColumn(
             MESES_ABBR[m], min_value=0.0, format=fmt, width="small")
@@ -342,11 +349,137 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
                           base_key, ultimo_key, ver_key)
     st.session_state[ultimo_key] = editado
 
-    with st.expander("Ver descripción de los centros de costo"):
-        st.dataframe(ccos.rename(columns={"CODIGO_CECO": "Código",
-                                          "DESCRIPCION_CECO": "Descripción"}),
-                     hide_index=True, width="stretch")
+    tabla_centros(ccos)
+    _excel_grilla(cfg, ccos, tarifas, origen, editado, solo_lectura,
+                  base_key, ultimo_key, ver_key)
     return editado
+
+
+def formato_ceco(ccos: pd.DataFrame):
+    """'01.01.07.01.02 · INSTITUTO PARA EL MATRIMONIO…' para las listas."""
+    desc = dict(zip(ccos["CODIGO_CECO"], ccos["DESCRIPCION_CECO"]))
+    return lambda c: f"{c} · {desc[c]}" if desc.get(c) else str(c)
+
+
+def tabla_centros(ccos: pd.DataFrame, titulo="🏷 Centros de costo que puedes usar"):
+    with st.expander(f"{titulo} ({len(ccos)})"):
+        st.caption("Son los centros de costo 2027. Escribe parte del nombre o del código "
+                   "en la búsqueda de la tabla (lupa, arriba a la derecha) para encontrarlo.")
+        st.dataframe(ccos[["CODIGO_CECO", "DESCRIPCION_CECO"]].rename(
+                         columns={"CODIGO_CECO": "Código", "DESCRIPCION_CECO": "Descripción"}),
+                     hide_index=True, width="stretch")
+
+
+def columnas_excel(cfg: dict, tarifas: dict) -> list:
+    """Las columnas de la grilla, descritas para su plantilla Excel."""
+    from .plantilla_grilla import Columna
+    nombres = {"DNI": "DNI", "NOMBRE": "Docente", "CENTRO_COSTO": "Centro de costo",
+               "CONCEPTO": "Concepto", "CONCEPTO_2": "Detalle", "TIPO": "Tipo",
+               "FOCO": "Foco", "TARIFA": "Tarifa (S/ por hora)"}
+    listas = dict(cfg.get("opciones", {}))
+    if cfg.get("precarga"):
+        precarga = _leer_precarga(cfg["precarga"])
+        for col in ("FOCO", "CONCEPTO"):
+            if col in precarga:
+                listas[col] = sorted(precarga[col].unique())
+    if cfg["tarifa"] == "catalogo":
+        listas[cfg["catalogo_key"]] = list(tarifas)
+    cols = []
+    for col in _columnas_fila(cfg):
+        titulo = etiqueta_dim(cfg, col, nombres.get(col, col.title()))
+        if col == "TARIFA":
+            cols.append(Columna(col, titulo, "numero", ancho=14))
+        elif col == "CENTRO_COSTO":
+            cols.append(Columna(col, titulo, "lista", ancho=18, obligatoria=True))
+        elif col in listas:
+            cols.append(Columna(col, titulo, "lista", listas[col], ancho=40,
+                                obligatoria=col in cfg["dimensiones"]))
+        else:
+            cols.append(Columna(col, titulo, "texto", ancho=40 if col == "CONCEPTO_2" else 24,
+                                obligatoria=col in cfg["dimensiones"]))
+    for m in MESES:
+        cols.append(Columna(m, MESES_ABBR[m], "numero", ancho=10))
+    return cols
+
+
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def zona_excel(titulo_archivo: str, columnas: list, df: pd.DataFrame, ccos: pd.DataFrame,
+               titulo: str, instrucciones: str, clave: str, solo_lectura: bool):
+    """Descargar la grilla en Excel y cargarla llenada. Devuelve la grilla
+    leída del archivo cuando el usuario pulsa «Cargar en la grilla»."""
+    from . import plantilla_grilla
+    with st.expander("📊 Llenar en Excel: descargar la plantilla y cargarla llenada"):
+        desc = dict(zip(ccos["CODIGO_CECO"], ccos["DESCRIPCION_CECO"]))
+        c1, c2 = st.columns([1, 2], vertical_alignment="bottom")
+        c1.download_button(
+            "⬇ Descargar la plantilla en Excel",
+            plantilla_grilla.plantilla(columnas, df, desc, titulo, instrucciones),
+            file_name=titulo_archivo, mime=XLSX, on_click="ignore", width="stretch",
+            key=f"btn_excel_{clave}")
+        if solo_lectura:
+            return None
+        c1.caption("Sale con lo que hay ahora en pantalla, con listas desplegables y la "
+                   "descripción de cada centro de costo.")
+        ver_key = f"_ver_up_{clave}"
+        archivo = c2.file_uploader("Cargar el Excel llenado", type=["xlsx"],
+                                   key=f"up_{clave}_{st.session_state.get(ver_key, 0)}")
+        if archivo is None:
+            return None
+        nuevo, errores, resumen = plantilla_grilla.leer(archivo, columnas,
+                                                        set(ccos["CODIGO_CECO"]))
+        if errores:
+            st.error(f"No se cargó nada: el archivo tiene {len(errores)} observación(es).",
+                     icon="🛑")
+            for e in errores[:15]:
+                st.markdown(f"- {e}")
+            if len(errores) > 15:
+                st.caption(f"… y {len(errores) - 15} más.")
+            return None
+        st.info(f"Archivo correcto: {resumen} Al cargarlo, estas líneas reemplazan a las "
+                "de la pantalla.", icon="📄")
+        if st.button("Cargar en la grilla", type="primary", key=f"btn_cargar_{clave}"):
+            st.session_state[ver_key] = st.session_state.get(ver_key, 0) + 1
+            return nuevo
+    return None
+
+
+def _excel_grilla(cfg, ccos, tarifas, origen, editado, solo_lectura,
+                  base_key, ultimo_key, ver_key):
+    hoja = cfg["_hoja"]
+    unidad = cfg.get("unidad") or ("horas" if cfg["metrica"] == "HORAS" else "importes en S/")
+    columnas = columnas_excel(cfg, tarifas)
+    nuevo = zona_excel(
+        f"{_norm_archivo(cfg['etiqueta'])}_{origen}_2027.xlsx", columnas, editado, ccos,
+        f"{cfg['etiqueta']} · {origen} · 2027",
+        f"Una línea por fila. Elige el centro de costo y las demás listas con la flecha de "
+        f"la celda; en cada mes escribe las {unidad}. Puedes agregar filas debajo. Al "
+        f"cargarlo en la app, las líneas del archivo reemplazan a las de la pantalla; "
+        f"revisa y pulsa Guardar.", f"{hoja}_{origen}", solo_lectura)
+    if nuevo is None:
+        return
+    base = _semilla(cfg, roster_vacio(), None) if nuevo.empty else nuevo
+    for c in _columnas_fila(cfg):
+        if c not in base:
+            base[c] = None
+    base = base[_columnas_fila(cfg) + MESES].reset_index(drop=True)
+    st.session_state[base_key] = base
+    st.session_state[ultimo_key] = base
+    st.session_state[ver_key] = st.session_state.get(ver_key, 0) + 1
+    st.session_state[f"_resultado_{hoja}"] = (
+        True, f"{len(base)} línea(s) del Excel cargadas. Revísalas y pulsa Guardar.")
+    st.rerun()
+
+
+def _norm_archivo(texto: str) -> str:
+    import unicodedata
+    t = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode().lower()
+    return "_".join("".join(ch if ch.isalnum() else " " for ch in t).split())
+
+
+def roster_vacio() -> pd.DataFrame:
+    return pd.DataFrame(columns=["DNI", "NOMBRE"])
 
 
 _COLS_LEDGER = ["DNI", "NOMBRE", "HORAS_META", "CENTRO_COSTO", "CONCEPTO", "HORAS"]

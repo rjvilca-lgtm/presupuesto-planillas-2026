@@ -11,8 +11,9 @@ DESARROLLO_HUMANO mantiene docentes, horas, tarifas y salarios,
 DEPARTAMENTO registra las planillas de sus departamentos, AREA (áreas no
 académicas, sql/crear_areas_2027.sql) registra las ayudantías de su área e
 INVESTIGACION (gestor de investigación, sql/crear_rol_investigacion.sql)
-registra solo la planilla de Investigación de sus departamentos; el
-departamento la revisa y la valoriza.
+registra la planilla de Investigación de sus departamentos (el departamento
+también puede modificarla y la valoriza) y PUESTOS (sql/crear_puestos_nuevos_2027.sql)
+registra los puestos nuevos de su departamento o área.
 
 Probar como: un usuario PRESUPUESTO puede ver la app con los permisos de otro
 correo (Administración › Usuarios) para revisar qué ve y qué puede hacer.
@@ -41,18 +42,19 @@ class Usuario:
     departamentos: list = field(default_factory=list)
     areas: list = field(default_factory=list)   # áreas no académicas (ayudantías)
     investigacion: list = field(default_factory=list)   # gestor: planilla Investigación
+    puestos: list = field(default_factory=list)   # departamentos o áreas: puestos nuevos
     probando_como: str | None = None   # correo cuyos permisos se están probando
     sin_rrhh: bool = False             # se le quitó Desarrollo Humano al probar
 
     @property
     def tiene_acceso(self) -> bool:
         return (self.presupuesto or self.dga or self.rrhh or bool(self.departamentos)
-                or bool(self.areas) or bool(self.investigacion))
+                or bool(self.areas) or bool(self.investigacion) or bool(self.puestos))
 
     @property
     def solo_investigacion(self) -> bool:
-        """Gestor de investigación sin otro rol: solo ve esa planilla."""
-        return bool(self.investigacion) and not (
+        """Gestor de investigación o de puestos sin otro rol: solo ve lo suyo."""
+        return bool(self.investigacion or self.puestos) and not (
             self.presupuesto or self.dga or self.rrhh or self.departamentos or self.areas)
 
     def planillas_de(self, depto: str) -> list | None:
@@ -186,6 +188,8 @@ def _con_permisos(usuario: Usuario, filas) -> Usuario:
             usuario.areas.append(f["DEPARTAMENTO"])
         elif f["ROL"] == "INVESTIGACION" and f["DEPARTAMENTO"]:
             usuario.investigacion.append(f["DEPARTAMENTO"])
+        elif f["ROL"] == "PUESTOS" and f["DEPARTAMENTO"]:
+            usuario.puestos.append(f["DEPARTAMENTO"])
     return usuario
 
 
@@ -219,7 +223,7 @@ def roles_texto(usuario: Usuario) -> str:
     roles = (["Presupuesto"] if usuario.presupuesto else []) + \
             (["DGA"] if usuario.dga else []) + \
             (["Desarrollo Humano"] if usuario.rrhh else []) + usuario.departamentos + \
-            usuario.areas + [f"Investigación {d}" for d in usuario.investigacion]
+            usuario.areas + [f"Investigación {d}" for d in usuario.investigacion] +             [f"Puestos {d}" for d in usuario.puestos]
     return ", ".join(roles)
 
 

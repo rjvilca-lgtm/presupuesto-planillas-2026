@@ -229,7 +229,46 @@ PLANILLAS = {
         "ayuda": "Registra las horas de ayudantía. El costo por hora se aplica "
                  "desde el catálogo.",
     },
+    # Pestaña propia (no está en el selector de planillas ni en el Resumen de
+    # los departamentos): la registran solo los usuarios con rol PUESTOS, por
+    # departamento o área. Formato de "Puestos nuevos.xlsx": cada fila es un
+    # puesto (nuevo o ascenso) en un centro de costo, con su justificación; en
+    # cada mes va cuántos puestos de ese tipo hay (normalmente 1). El costo
+    # mensual por puesto (sueldo, bonos y cargas sociales) sale de tarifas_2027
+    # (HOJA_ORIGEN 'Puestos nuevos', sql/crear_puestos_nuevos_2027.sql).
+    "Puestos nuevos": {
+        "etiqueta": "Puestos nuevos",
+        "pestaña_propia": True,
+        "metrica": "HORAS",            # cantidad de puestos en el mes
+        "unidad": "puestos",
+        "formato_mes": "%.0f",
+        "guardar_importe": True,       # IMPORTE = puestos × costo mensual
+        "dimensiones": ["CENTRO_COSTO", "TIPO", "CONCEPTO_2", "MES"],
+        "etiquetas": {"TIPO": "Puesto", "CONCEPTO_2": "Justificación"},
+        "tarifa": "catalogo",
+        "catalogo_key": "TIPO",
+        "usa_roster": False,
+        "sps": [],
+        "ayuda": "Una fila por puesto: el centro de costo, el puesto (NUEVO, o UPGRADE si "
+                 "es un ascenso: se presupuesta la diferencia de sueldo) y por qué se "
+                 "necesita. En cada mes en que el puesto debe estar cubierto escribe 1 "
+                 "(o cuántos puestos iguales hacen falta). El costo mensual incluye "
+                 "sueldo, bonos y cargas sociales.",
+    },
 }
+
+
+PUESTOS_NUEVOS = "Puestos nuevos"
+
+
+def planillas_departamento() -> dict:
+    """Las planillas del selector y del Resumen de cada departamento (sin las
+    que tienen pestaña propia, como Puestos nuevos)."""
+    return {h: c for h, c in PLANILLAS.items() if not c.get("pestaña_propia")}
+
+
+def etiqueta_dim(cfg: dict, dim: str, defecto: str) -> str:
+    return cfg.get("etiquetas", {}).get(dim, defecto)
 
 
 def cfg_de(hoja: str) -> dict:

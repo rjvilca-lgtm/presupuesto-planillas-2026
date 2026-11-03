@@ -16,6 +16,7 @@ import sys
 import time
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
 
@@ -47,7 +48,7 @@ from src.borrador import (aviso_al_salir, autoguardar, firma, marcar_guardado,
                           mostrar_indicador, indicador, pendiente, toca_autoguardar)
 from src.diagnostico import iniciar_medicion, iniciar_vigilante, registrar, vista_diagnostico
 from src.carga_academica import consulta_carga_academica, registro_carga_academica
-from src.config import MESES, cfg_de, dims_fila
+from src.config import MESES, PUESTOS_NUEVOS, cfg_de, dims_fila
 from src.flujo import (aviso_departamento, leer_flujo, marcar, ahora, panel_flujo,
                        vista_admin, vista_resumen)
 from src.reporte import vista_reporte
@@ -95,6 +96,8 @@ def _main(contexto):
                          lambda: vista_departamentos(repo, fl, usuario)))
     if usuario.presupuesto or usuario.areas:
         pestañas.append(("Ayudantías · áreas", lambda: vista_areas(repo, fl, usuario)))
+    if usuario.presupuesto or usuario.puestos:
+        pestañas.append(("Puestos nuevos", lambda: vista_puestos(repo, fl, usuario)))
     if usuario.presupuesto or usuario.dga:
         pestañas.append(("Carga académica · registro (DGA)",
                          lambda: registro_carga_academica(repo, fl, usuario)))
@@ -180,10 +183,10 @@ INVESTIGACION = "Investigacion"
 
 
 def _aviso_investigacion(repo, usuario, origen) -> bool:
-    """Planilla de Investigación (sql/crear_rol_investigacion.sql): si el
-    departamento tiene gestor de investigación, la registra el gestor y el
-    departamento solo la ve y la valoriza desde Resumen. Devuelve si queda en
-    solo lectura para este usuario."""
+    """Planilla de Investigación (sql/crear_rol_investigacion.sql): la
+    registran el gestor de investigación y el departamento (los dos pueden
+    modificarla; el control de versiones evita pisarse). El departamento la
+    valoriza desde Resumen. Devuelve si queda en solo lectura (hoy nunca)."""
     gestores = repo.gestores_investigacion(origen)
     ultimo = repo.ultimo_guardado(INVESTIGACION, origen)
     from src.flujo import fmt
@@ -194,14 +197,12 @@ def _aviso_investigacion(repo, usuario, origen) -> bool:
                 "veces que quieras; el departamento la revisa y la valoriza." + quien,
                 icon="🔬")
         return False
-    if gestores and not usuario.presupuesto:
-        st.info(f"La planilla de Investigación de {origen} la registra el gestor de "
-                f"investigación ({', '.join(gestores)}). Aquí puedes revisarla; para "
-                "valorizarla ve a «Resumen y valorización»." + quien, icon="🔬")
-        return True
-    if gestores:   # Presupuesto puede corregirla
-        st.caption(f"🔬 La registra el gestor de investigación ({', '.join(gestores)})."
-                   + quien)
+    if gestores:   # el departamento (y Presupuesto) también pueden modificarla
+        st.info(f"La planilla de Investigación de {origen} también la registra el gestor "
+                f"de investigación ({', '.join(gestores)}). Puedes revisarla y modificarla; "
+                "si los dos la editan a la vez, el segundo en guardar recibe un aviso para "
+                "recargar y no se pierde nada. Para valorizarla ve a «Resumen y "
+                "valorización»." + quien, icon="🔬")
     return False
 
 
@@ -235,6 +236,48 @@ def vista_areas(repo, fl, usuario):
                        repo.tarifas(AYUDANTIAS), origen,
                        entrada[entrada["HOJA_ORIGEN"] == AYUDANTIAS], solo_lectura, usuario,
                        sps=tuple(cfg["sps"]))
+
+
+def vista_puestos(repo, fl, usuario):
+    """Puestos nuevos y ascensos (formato de «Puestos nuevos.xlsx»): solo los
+    usuarios con rol PUESTOS, por departamento o área (Presupuesto, todos). Usa
+    la misma grilla que las demás planillas; el costo mensual de cada puesto
+    sale de tarifas_2027 (sql/crear_puestos_nuevos_2027.sql)."""
+    cfg = cfg_de(PUESTOS_NUEVOS)
+    deptos, areas = dict(repo.departamentos()), dict(repo.areas())
+    unidades = {**deptos, **areas}
+    if not usuario.presupuesto:
+        unidades = {c: n for c, n in unidades.items() if c in set(usuario.puestos)}
+    if not unidades:
+        st.info("No tienes departamentos ni áreas asignados para puestos nuevos.", icon="🔒")
+        return
+    origen = st.selectbox("Departamento o área", list(unidades), key="unidad_puestos",
+                          format_func=lambda c: f"{c} · {unidades[c]}")
+    st.session_state["_pantalla_detalle"] = origen
+    st.caption(cfg["ayuda"])
+    solo_lectura = aviso_departamento(fl, origen)
+    ccos = repo.centros_costo(origen) if origen in deptos else repo.centros_costo_area(origen)
+    if ccos.empty:
+        st.warning(f"{origen} no tiene centros de costo 2027 asignados. Pídelo a la Oficina "
+                   "de Presupuesto.", icon="⚠️")
+        return
+    tarifas = repo.tarifas(PUESTOS_NUEVOS)
+    if not tarifas:
+        st.warning("Aún no están cargados los costos de los puestos. La Oficina de "
+                   "Presupuesto debe ejecutar `sql/crear_puestos_nuevos_2027.sql` y la "
+                   "carga de costos en Azure.", icon="⚠️")
+        return
+    with st.expander(f"💼 Costo mensual de cada puesto ({len(tarifas)})"):
+        st.caption("Sueldo, bonos, Edenred y cargas sociales de un mes. En un UPGRADE "
+                   "(ascenso) es solo la diferencia de sueldo con el puesto anterior, más "
+                   "sus cargas.")
+        st.dataframe(pd.DataFrame(list(tarifas.items()), columns=["Puesto", "Costo mensual"]),
+                     hide_index=True, width="stretch", column_config={
+                         "Costo mensual": st.column_config.NumberColumn(format="S/ %,.2f")})
+    entrada = repo.entrada(origen)
+    borrador.registrar_version(repo, PUESTOS_NUEVOS, origen)
+    _renderizar_grilla(repo, fl, PUESTOS_NUEVOS, cfg, ccos, roster_vacio(), tarifas, origen,
+                       entrada[entrada["HOJA_ORIGEN"] == PUESTOS_NUEVOS], solo_lectura, usuario)
 
 
 def _mostrar_resultado(hoja, flotante=False):
@@ -472,6 +515,8 @@ def guardar_borrador(repo, hoja, origen, editado, email, sps=(), gestor=False):
             momento = ahora()
             marcar(repo, origen, FECHA_GUARDADO=momento, FECHA_VALORIZACION=momento)
             return True, f"{cfg['etiqueta']}: {n} registro(s) guardado(s) y valorizado(s)."
+        if cfg.get("pestaña_propia"):   # no se valoriza: no marca el flujo del depto
+            return True, f"{cfg['etiqueta']}: {n} registro(s) guardado(s)."
         marcar(repo, origen, FECHA_GUARDADO=ahora())
         if gestor:   # el gestor de investigación no valoriza: lo hace el departamento
             return True, (f"{cfg['etiqueta']}: {n} registro(s) guardado(s). El departamento "
@@ -495,7 +540,6 @@ def mensaje_conflicto(etiqueta, c) -> str:
 
 
 def roster_vacio():
-    import pandas as pd
     return pd.DataFrame(columns=["DNI", "NOMBRE"])
 
 

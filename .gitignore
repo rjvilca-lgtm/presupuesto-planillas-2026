@@ -30,3 +30,6 @@ logs.txt
 
 # Plantillas en blanco de Desarrollo Humano (sin datos)
 !plantillas/*.xlsx
+
+# Montos de sueldos (escala de puestos): solo en la carpeta local
+sql/*_privado.sql

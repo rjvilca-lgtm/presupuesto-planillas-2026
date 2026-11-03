@@ -75,6 +75,9 @@ _CCOS_DEMO = {
 _TARIFAS_DEMO = {
     "Horas Adicionales": {"Titular": 152.0, "Jefe de practica": 105.0, "Asistente": 100.0},
     "Ayudantias": {"Ayudantía": 4.5},
+    # Montos de ejemplo (los reales van solo en Azure)
+    "Puestos nuevos": {"NUEVO · ANALISTA": 4000.0, "NUEVO · AUXILIAR": 2500.0,
+                       "UPGRADE · ASISTENTE A ANALISTA": 500.0},
 }
 
 _ROSTER_DEMO = {
@@ -1729,6 +1732,8 @@ def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list
     largo["MES"] = largo["MES"].map(lambda m: str(MESES.index(m) + 1))
 
     cols = ["PRESUPUESTO", "HOJA_ORIGEN", "ORIGEN"] + cfg["dimensiones"] + [destino]
+    if cfg.get("guardar_importe"):
+        cols.append("IMPORTE")
     info_destino = cfg.get("info_destino", {})
     cols += list(info_destino.values())
     tarifas = {}
@@ -1750,5 +1755,7 @@ def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list
                 if cfg.get("tarifa_editable") else None
             if propia is not None and pd.notna(propia) and propia > 0:
                 reg["TARIFA"] = float(propia)
+        if cfg.get("guardar_importe"):
+            reg["IMPORTE"] = round(reg[destino] * reg["TARIFA"], 2)
         filas.append([reg[c] for c in cols])
     return filas, cols

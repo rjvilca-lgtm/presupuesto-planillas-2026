@@ -91,7 +91,13 @@ def validar(hoja: str, df: pd.DataFrame, ccos_validos: set, tarifas: dict,
     for dim in dims:
         col = sub[dim].astype(str).str.strip()
         if col.eq("").any() or sub[dim].isna().any():
-            errores.append(f"Hay filas con datos pero sin {_nombre_dim(dim)}.")
+            nombre = cfg.get("etiquetas", {}).get(dim, _nombre_dim(dim)).lower()
+            errores.append(f"Hay filas con datos pero sin {nombre}.")
+        largo = 255 if dim == "CONCEPTO_2" else 150 if dim == "CONCEPTO" else None
+        if largo and col.str.len().gt(largo).any():
+            nombre = cfg.get("etiquetas", {}).get(dim, _nombre_dim(dim)).lower()
+            errores.append(f"Hay textos de {nombre} de más de {largo} caracteres; "
+                           "acórtalos.")
 
     fuera = set(sub["CENTRO_COSTO"].dropna()) - ccos_validos
     if fuera:
