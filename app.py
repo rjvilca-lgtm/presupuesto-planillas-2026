@@ -45,7 +45,7 @@ from src.auth import barra_usuario, exigir_login
 from src import borrador
 from src.borrador import (aviso_al_salir, autoguardar, firma, marcar_guardado,
                           mostrar_indicador, indicador, pendiente, toca_autoguardar)
-from src.diagnostico import registrar, vista_diagnostico
+from src.diagnostico import iniciar_medicion, iniciar_vigilante, registrar, vista_diagnostico
 from src.carga_academica import consulta_carga_academica, registro_carga_academica
 from src.config import MESES, cfg_de, dims_fila
 from src.flujo import (aviso_departamento, leer_flujo, marcar, ahora, panel_flujo,
@@ -62,6 +62,8 @@ from src.vistas import (TC_HOJAS, ficha_docente, grilla, hero,
 def main():
     """Mide cuánto tarda el servidor en cada ejecución (ver src/diagnostico.py)."""
     t0 = time.perf_counter()
+    iniciar_vigilante()
+    iniciar_medicion()
     contexto = {"pantalla": "Login", "email": "—"}
     try:
         _main(contexto)
@@ -252,6 +254,25 @@ def _mostrar_resultado(hoja, flotante=False):
 @st.fragment
 def _renderizar_ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guardado,
                          solo_lectura, usuario, prelim=None):
+    """Mide las ejecuciones solo de la ficha (cada tecla o Guardar), que no
+    pasan por main(); en una ejecución completa ya la mide main()."""
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+    ctx = get_script_run_ctx()
+    if not (ctx and ctx.fragment_ids_this_run):
+        return _ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guardado,
+                         solo_lectura, usuario, prelim)
+    t0 = time.perf_counter()
+    iniciar_medicion()
+    try:
+        return _ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guardado,
+                         solo_lectura, usuario, prelim)
+    finally:
+        registrar(f"Ficha TC (solo la ficha) › {origen} · {hoja}", usuario.email,
+                  time.perf_counter() - t0)
+
+
+def _ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guardado,
+              solo_lectura, usuario, prelim=None):
     """Ficha TC (maestro-detalle) con guardado de borrador en la barra fija.
     Es un fragmento: cada tecla o clic dentro de la ficha vuelve a dibujar solo
     la ficha, no la página entera (encabezado, flujo, consultas). Guardar

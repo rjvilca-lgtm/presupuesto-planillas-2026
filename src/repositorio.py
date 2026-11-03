@@ -23,6 +23,7 @@ from contextlib import contextmanager
 import pandas as pd
 import streamlit as st
 
+from .diagnostico import anotar_sql
 from .config import (CARGA_ACADEMICA, CONCEPTO_ACADEMICAS, HORAS_PLAN_TC, MESES, PLANILLAS,
                      PRESUPUESTO, TOLERANCIA_HORAS, cfg_de, dims_fila)
 
@@ -469,7 +470,10 @@ def _conexion_lectura(server, port, database, user):
 def _consultar(server, port, database, user, password,
                sql: str, params: tuple) -> pd.DataFrame:
     grupo = _conexion_lectura(server, port, database, user)
+    t0 = time.perf_counter()
     compartida = grupo.get()          # espera si las 4 están ocupadas
+    espera = time.perf_counter() - t0
+    t1, filas = time.perf_counter(), None
     try:
         for intento in (1, 2):
             if compartida["conn"] is None:
@@ -495,6 +499,8 @@ def _consultar(server, port, database, user, password,
                     raise
     finally:
         grupo.put(compartida)
+        anotar_sql(espera, time.perf_counter() - t1, sql,
+                   len(filas) if filas is not None else None)
 
 
 # Catálogos y datos que cambian poco: 1 hora en memoria. Todo guardado desde la
@@ -1540,7 +1546,16 @@ class RepositorioSQL:
         sql_delete = ("DELETE FROM DATOS_ENTRADA "
                       "WHERE HOJA_ORIGEN = %s AND ORIGEN = %s AND PRESUPUESTO = %s")
         print(f"[guardar] {PRESUPUESTO} · {hoja} · {origen}: {len(filas)} fila(s)", flush=True)
+        etapas, t0 = {}, time.perf_counter()
+        marca = [t0]
+
+        def etapa(nombre):   # tiempo desde la etapa anterior
+            ahora = time.perf_counter()
+            etapas[nombre] = etapas.get(nombre, 0) + ahora - marca[0]
+            marca[0] = ahora
+
         with self._conn() as conn:
+            etapa("conexión")
             cur = conn.cursor()
             try:
                 # Los índices únicos filtrados de DATOS_ENTRADA (sql/crear_indices_2027.sql)
@@ -1555,6 +1570,7 @@ class RepositorioSQL:
                     "@LockTimeout = 30000; IF @r < 0 THROW 50020, "
                     "'Otro guardado de esta planilla está en curso; intenta de nuevo.', 1;",
                     [f"DATOS_ENTRADA|{PRESUPUESTO}|{hoja}|{origen}"])
+                etapa("bloqueo")
                 actual = None
                 if control:
                     cur.execute("SELECT VERSION, EMAIL, FECHA FROM GUARDADOS_2027 "
@@ -1566,14 +1582,17 @@ class RepositorioSQL:
                         raise ConflictoGuardado(fila[1], fila[2])
                 cur.execute(sql_delete, [hoja, origen, PRESUPUESTO])
                 print(f"[guardar] DELETE previo: {cur.rowcount} fila(s)", flush=True)
+                etapa("delete")
                 cur.executemany(sql_insert, filas)
                 print("[guardar] INSERT ok", flush=True)
+                etapa("insert")
                 for sp, lleva_origen in sps:
                     if lleva_origen:
                         cur.execute(f"EXEC {sp} @OrigenEntrada = %s", [origen])
                     else:
                         cur.execute(f"EXEC {sp}")
                     print(f"[guardar] EXEC {sp} ok", flush=True)
+                    etapa("valorizar")
                 if control:
                     lima = _hora_lima()
                     cur.execute(
@@ -1591,11 +1610,16 @@ class RepositorioSQL:
                         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                         [PRESUPUESTO, hoja, origen, email, _hora_lima(), len(filas),
                          actual + 1 if control else None, bool(sps)])
+                etapa("versión y bitácora")
                 conn.commit()
+                etapa("commit")
                 nueva = actual + 1 if control else None
                 if al_confirmar:
                     al_confirmar(nueva)
-                print("[guardar] COMMIT", flush=True)
+                total = time.perf_counter() - t0
+                detalle = ", ".join(f"{k} {v:.1f}s" for k, v in etapas.items())
+                print(f"[guardar] COMMIT · total {total:.1f}s ({detalle})"
+                      f"{' LENTO' if total >= 3 else ''}", flush=True)
                 return len(filas), nueva
             except Exception as e:
                 conn.rollback()
