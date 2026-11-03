@@ -477,15 +477,18 @@ def _consultar(server, port, database, user, password,
     try:
         for intento in (1, 2):
             if compartida["conn"] is None:
-                compartida["conn"] = _conectar_con_timeout(server, port, database,
-                                                           user, password)
+                nueva = _conectar_con_timeout(server, port, database, user, password)
+                # Solo lecturas: sin transacción. Con la transacción implícita de
+                # pytds cada lectura terminaba con un ROLLBACK, otro viaje de ida
+                # y vuelta a Azure (Brasil): ~1/3 del tiempo de cada consulta.
+                nueva.autocommit = True
+                compartida["conn"] = nueva
             conn = compartida["conn"]
             try:
                 cur = conn.cursor()
                 cur.execute(sql, list(params))
                 columnas = [d[0] for d in cur.description]
                 filas = cur.fetchall()
-                conn.rollback()   # cierra la transacción implícita de la lectura
                 return pd.DataFrame(filas, columns=columnas)
             except Exception as e:
                 # Conexión caída (Azure cierra las inactivas): se reabre una vez
@@ -535,6 +538,15 @@ def _sp_visible(server, port, database, user, password, nombre: str) -> bool:
 
 @st.cache_data(ttl=20, show_spinner=False)
 def _leer_corto(server, port, database, user, password,
+                sql: str, params: tuple) -> pd.DataFrame:
+    return _consultar(server, port, database, user, password, sql, params)
+
+
+# Datos que cambian solo desde la app y por acciones de administración
+# (permisos de un correo, catálogo y verificación de centros de costo): 5
+# minutos. Los guardados de usuarios y de centros la vacían al instante.
+@st.cache_data(ttl=300, show_spinner=False)
+def _leer_medio(server, port, database, user, password,
                 sql: str, params: tuple) -> pd.DataFrame:
     return _consultar(server, port, database, user, password, sql, params)
 
@@ -755,6 +767,7 @@ class RepositorioSQL:
         ver lo recién cargado, no la copia cacheada."""
         _leer_cacheado.clear()
         _leer_corto.clear()
+        _leer_medio.clear()
         _leer_valorizado.clear()
 
     def limpiar_cache_trabajo(self):
@@ -802,6 +815,10 @@ class RepositorioSQL:
                 _PRECALENTANDO.release()
 
         threading.Thread(target=tarea, daemon=True, name="precalentar").start()
+
+    def _leer_medio(self, sql: str, params: tuple = ()) -> pd.DataFrame:
+        return _leer_medio(self._server, self._port, self._database,
+                           self._user, self._password, sql, params)
 
     def _leer_vivo(self, sql: str, params: tuple = ()) -> pd.DataFrame:
         """Datos que cambian con el trabajo de los usuarios (borradores,
@@ -877,7 +894,7 @@ class RepositorioSQL:
         """(estados por departamento, fecha de bloqueo, tablas disponibles).
         Si aún no se ejecutó sql/crear_estado_presupuesto.sql, devuelve
         disponible=False y la app funciona sin bloqueos."""
-        existe = self._leer_vivo(
+        existe = self._leer(
             "SELECT OBJECT_ID('dbo.ESTADO_DEPARTAMENTO', 'U') AS E, "
             "OBJECT_ID('dbo.CONFIG_PRESUPUESTO', 'U') AS C")
         if existe["E"].iloc[0] is None or existe["C"].iloc[0] is None:
@@ -897,6 +914,7 @@ class RepositorioSQL:
             cur.execute(sql, params)
             conn.commit()
         _leer_corto.clear()
+        _leer_medio.clear()
 
     def actualizar_estado(self, depto: str, **campos):
         cols = [c for c in campos if c in CAMPOS_ESTADO]
@@ -1234,21 +1252,22 @@ class RepositorioSQL:
         """Catálogo 2027 con quién usa cada centro: departamentos que pueden
         presupuestarlo, departamentos que lo tienen en la ficha TC y filas
         guardadas en 2027."""
-        return self._leer_vivo(
+        return self._leer_medio(
             "SELECT c.CENTRO_COSTO, c.DESCRIPCION_CC, c.DIRECCION, "
             "(SELECT STRING_AGG(d.DEPARTAMENTO, ', ') WITHIN GROUP (ORDER BY d.DEPARTAMENTO) "
             " FROM CECOS_DEPARTAMENTO_2027 d WHERE d.CENTRO_COSTO = c.CENTRO_COSTO) AS DEPARTAMENTOS, "
             "(SELECT STRING_AGG(x.DEPARTAMENTO, ', ') WITHIN GROUP (ORDER BY x.DEPARTAMENTO) "
             " FROM (SELECT DISTINCT t.DEPARTAMENTO FROM CECO_CONCEPTO_TC t "
             "       WHERE t.CENTRO_COSTO = c.CENTRO_COSTO AND t.ACTIVO = 1) x) AS FICHA_TC, "
-            "(SELECT COUNT(*) FROM DATOS_ENTRADA e WHERE e.PRESUPUESTO = %s "
-            " AND e.CENTRO_COSTO = c.CENTRO_COSTO) AS FILAS_2027 "
-            "FROM CENTROS_COSTOS_2027 c ORDER BY c.CENTRO_COSTO", (PRESUPUESTO,))
+            "ISNULL(f.FILAS, 0) AS FILAS_2027 "
+            "FROM CENTROS_COSTOS_2027 c LEFT JOIN (SELECT CENTRO_COSTO, COUNT(*) AS FILAS "
+            " FROM DATOS_ENTRADA WHERE PRESUPUESTO = %s GROUP BY CENTRO_COSTO) f "
+            " ON f.CENTRO_COSTO = c.CENTRO_COSTO ORDER BY c.CENTRO_COSTO", (PRESUPUESTO,))
 
     def verificacion_cecos(self) -> dict:
         """Lo que impide presupuestar o no cuadra entre catálogo, asignaciones,
         ficha TC y lo guardado en 2027."""
-        leer = lambda sql, params=(): self._leer_vivo(sql, params)
+        leer = lambda sql, params=(): self._leer_medio(sql, params)
         return {
             # Centros de una facultad que ningún departamento puede presupuestar
             "sin_departamento": leer(
@@ -1415,8 +1434,9 @@ class RepositorioSQL:
                                "FROM AUDITORIA_CECOS_2027 ORDER BY ID DESC")
 
     def permisos_usuario(self, email: str) -> pd.DataFrame:
-        """Roles activos del correo (ver sql/crear_usuarios_planillas.sql)."""
-        return self._leer_vivo(
+        """Roles activos del correo (ver sql/crear_usuarios_planillas.sql).
+        Se lee en cada clic: caché de 5 minutos, vaciada al cambiar accesos."""
+        return self._leer_medio(
             "SELECT ROL, DEPARTAMENTO FROM USUARIOS_PLANILLAS "
             "WHERE LOWER(EMAIL) = %s AND ACTIVO = 1", (email.lower(),))
 
@@ -1520,6 +1540,7 @@ class RepositorioSQL:
                 conn.rollback()
                 raise
         _leer_corto.clear()
+        _leer_medio.clear()
         return len(accesos)
 
     def fijar_fecha_bloqueo(self, fecha):
