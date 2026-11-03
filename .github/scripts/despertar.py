@@ -38,13 +38,22 @@ with sync_playwright() as p:
     else:
         print("La app estaba despierta.")
 
-    # Esperar a que cargue (al despertar puede tardar un par de minutos) y
-    # quedarse un rato para que cuente como visita
-    for _ in range(18):
-        if app_cargada(page):
-            break
-        page.wait_for_timeout(10_000)
-    ok = app_cargada(page)
+    # Esperar a que cargue: al despertar, o cuando la app está ocupada con
+    # otros usuarios, puede tardar varios minutos. Si a los 4 minutos no cargó,
+    # se recarga la página una vez y se espera otros 4.
+    def esperar(intentos: int) -> bool:
+        for _ in range(intentos):
+            if app_cargada(page):
+                return True
+            page.wait_for_timeout(10_000)
+        return app_cargada(page)
+
+    ok = esperar(24)
+    if not ok:
+        print("No cargó en 4 minutos: recargando la página…")
+        page.reload(wait_until="domcontentloaded", timeout=90_000)
+        ok = esperar(24)
+    # Quedarse un rato para que cuente como visita
     page.wait_for_timeout(15_000)
     navegador.close()
 

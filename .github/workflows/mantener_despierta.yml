@@ -6,7 +6,9 @@ name: Mantener la app despierta
 
 on:
   schedule:
-    - cron: "17 * * * *"   # cada hora, al minuto 17
+    # Cada 30 min: GitHub retrasa o salta muchas ejecuciones programadas (en
+    # la práctica corría cada 4-8 h), así que se pide más seguido.
+    - cron: "17,47 * * * *"
   workflow_dispatch:
 
 jobs:
