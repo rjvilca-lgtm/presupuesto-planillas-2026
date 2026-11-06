@@ -31,6 +31,26 @@ COLS_BITACORA = ["FECHA", "ORIGEN", "HOJA_ORIGEN", "EMAIL", "FILAS", "VALORIZADO
 COLS_CATALOGO = ["CENTRO_COSTO", "DESCRIPCION_CC", "DIRECCION", "DEPARTAMENTOS", "FICHA_TC", "FILAS_2027"]
 
 
+def insertar_por_lotes(cur, tabla: str, cols: list[str], filas) -> None:
+    """INSERT de muchas filas con pocos viajes a la base.
+
+    executemany manda una fila por viaje: contra Azure (Brasil) eran ~0,36 s
+    por fila, 70 s para un plan TC de 190 filas. Aquí va un INSERT ... VALUES
+    con varias filas por sentencia, dentro de los límites de SQL Server
+    (2100 parámetros y 1000 filas por VALUES)."""
+    filas = [list(f) for f in filas]
+    if not filas:
+        return
+    n = len(cols)
+    por_lote = max(1, min(1000, 2000 // n))
+    fila_sql = "(" + ", ".join(["%s"] * n) + ")"
+    cabeza = f"INSERT INTO {tabla} ({', '.join(cols)}) VALUES "
+    for i in range(0, len(filas), por_lote):
+        lote = filas[i:i + por_lote]
+        cur.execute(cabeza + ", ".join([fila_sql] * len(lote)),
+                    [v for f in lote for v in f])
+
+
 def _hora_lima() -> datetime:
     """Hora de Lima (UTC-5, sin horario de verano), como el resto de la app:
     SYSDATETIME() en Azure es UTC."""
@@ -1022,8 +1042,7 @@ class RepositorioSQL:
 
         def padron(cur):
             cur.execute("DELETE FROM HORAS_DOCENTES")
-            cur.executemany("INSERT INTO HORAS_DOCENTES (DPTO, DNI, NOMBRE, HORAS) "
-                            "VALUES (%s, %s, %s, %s)", docentes)
+            insertar_por_lotes(cur, "HORAS_DOCENTES", ["DPTO", "DNI", "NOMBRE", "HORAS"], docentes)
             # Reemplazo completo: el padrón debe quedar exactamente con el
             # archivo (el 19/10/2026 dos importaciones cruzadas duplicaron filas)
             cur.execute("SELECT COUNT(*) FROM HORAS_DOCENTES")
@@ -1032,8 +1051,7 @@ class RepositorioSQL:
 
         def sueldos(cur):
             cur.execute("DELETE FROM Remuneraciones_2027")
-            cur.executemany(f"INSERT INTO Remuneraciones_2027 ({', '.join(cols_sal)}) "
-                            f"VALUES ({', '.join(['%s'] * len(cols_sal))})", salarios)
+            insertar_por_lotes(cur, "Remuneraciones_2027", cols_sal, salarios)
 
         if self._rrhh is None:
             def todo(cur):
@@ -1573,8 +1591,6 @@ class RepositorioSQL:
         Devuelve (filas, nueva versión o None)."""
         control = self._control_versiones()
         bitacora = self._hay_bitacora()
-        placeholders = ", ".join(["%s"] * len(cols))
-        sql_insert = f"INSERT INTO DATOS_ENTRADA ({', '.join(cols)}) VALUES ({placeholders})"
         sql_delete = ("DELETE FROM DATOS_ENTRADA "
                       "WHERE HOJA_ORIGEN = %s AND ORIGEN = %s AND PRESUPUESTO = %s")
         print(f"[guardar] {PRESUPUESTO} · {hoja} · {origen}: {len(filas)} fila(s)", flush=True)
@@ -1615,7 +1631,7 @@ class RepositorioSQL:
                 cur.execute(sql_delete, [hoja, origen, PRESUPUESTO])
                 print(f"[guardar] DELETE previo: {cur.rowcount} fila(s)", flush=True)
                 etapa("delete")
-                cur.executemany(sql_insert, filas)
+                insertar_por_lotes(cur, "DATOS_ENTRADA", cols, filas)
                 print("[guardar] INSERT ok", flush=True)
                 etapa("insert")
                 for sp, lleva_origen in sps:
