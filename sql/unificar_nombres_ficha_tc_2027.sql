@@ -11,6 +11,9 @@
   quien lo tenga abierto verá el aviso para recargar, en vez de volver a
   guardar con los nombres viejos.
 
+  Además agrega «Gestión de Dirección» (centro '0') a DAIC, DCCOMP, DCN y
+  DPSI, que no la tenían; el resto de departamentos ya la tiene.
+
   Se puede ejecutar antes o después de sql/igualar_cecos_facultades_2027.sql,
   y más de una vez. Queda anotado en AUDITORIA_CECOS_2027.
 */
@@ -55,6 +58,25 @@ OUTPUT @ahora, @quien, N'FICHA TC RENOMBRAR',
   INTO dbo.AUDITORIA_CECOS_2027 (FECHA, EMAIL, ACCION, DETALLE)
 FROM dbo.CECO_CONCEPTO_TC t
 JOIN @nombres n ON t.CONCEPTO COLLATE Latin1_General_CS_AS = n.VIEJO;
+
+-- Gestión de Dirección (centro '0') para los departamentos que no la tenían.
+-- DMAT la tiene como concepto de su centro de departamento, a propósito.
+DECLARE @direccion TABLE (DEPARTAMENTO varchar(20));
+INSERT INTO @direccion VALUES ('DAIC'), ('DCCOMP'), ('DCN'), ('DPSI');
+
+UPDATE t SET ACTIVO = 1
+OUTPUT @ahora, @quien, N'FICHA TC REACTIVAR', inserted.DEPARTAMENTO + N' · 0: ' + inserted.CONCEPTO
+  INTO dbo.AUDITORIA_CECOS_2027 (FECHA, EMAIL, ACCION, DETALLE)
+FROM dbo.CECO_CONCEPTO_TC t JOIN @direccion d ON d.DEPARTAMENTO = t.DEPARTAMENTO
+WHERE t.CENTRO_COSTO = '0' AND t.CONCEPTO = N'Gestión de Dirección' AND t.ACTIVO = 0;
+
+INSERT INTO dbo.CECO_CONCEPTO_TC (DEPARTAMENTO, CENTRO_COSTO, CONCEPTO, ACTIVO)
+OUTPUT @ahora, @quien, N'FICHA TC AGREGAR', inserted.DEPARTAMENTO + N' · 0: ' + inserted.CONCEPTO
+  INTO dbo.AUDITORIA_CECOS_2027 (FECHA, EMAIL, ACCION, DETALLE)
+SELECT d.DEPARTAMENTO, '0', N'Gestión de Dirección', 1
+FROM @direccion d
+WHERE NOT EXISTS (SELECT 1 FROM dbo.CECO_CONCEPTO_TC t
+                  WHERE t.DEPARTAMENTO = d.DEPARTAMENTO AND t.CENTRO_COSTO = '0');
 
 COMMIT;
 
