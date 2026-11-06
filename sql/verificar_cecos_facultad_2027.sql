@@ -105,3 +105,84 @@ FROM cruce x JOIN dbo.CENTROS_COSTOS_2027 c ON c.CENTRO_COSTO = x.CENTRO_COSTO
 GROUP BY x.DIRECCION, x.CENTRO_COSTO, c.DESCRIPCION_CC, x.CONCEPTO
 HAVING MIN(TIENE) = 0
 ORDER BY FACULTAD, x.CENTRO_COSTO, x.CONCEPTO;
+
+
+/* ---------------------------------------------------------------------------
+   3) Plan TC: lo que el usuario vería repetido o inconsistente en su ficha
+      (todos los departamentos). Cada consulta debería salir vacía, salvo la
+      3f, que es informativa.
+--------------------------------------------------------------------------- */
+
+-- 3a. Un departamento con dos códigos de centro que tienen la misma
+--     descripción (vería el mismo centro dos veces)
+SELECT x.DEPARTAMENTO, c.DESCRIPCION_CC,
+       STRING_AGG(x.CENTRO_COSTO, ', ') WITHIN GROUP (ORDER BY x.CENTRO_COSTO) AS CODIGOS
+FROM (SELECT DEPARTAMENTO, CENTRO_COSTO FROM dbo.CECOS_DEPARTAMENTO_2027
+      UNION
+      SELECT DEPARTAMENTO, CENTRO_COSTO FROM dbo.CECO_CONCEPTO_TC WHERE ACTIVO = 1) x
+JOIN dbo.CENTROS_COSTOS_2027 c ON c.CENTRO_COSTO = x.CENTRO_COSTO
+GROUP BY x.DEPARTAMENTO, c.DESCRIPCION_CC
+HAVING COUNT(*) > 1
+ORDER BY 1, 2;
+
+-- 3b. El mismo concepto repetido en un centro (sin contar mayúsculas, tildes
+--     ni espacios)
+SELECT DEPARTAMENTO, CENTRO_COSTO, STRING_AGG(CONCEPTO, ' | ') AS CONCEPTOS
+FROM dbo.CECO_CONCEPTO_TC
+WHERE ACTIVO = 1
+GROUP BY DEPARTAMENTO, CENTRO_COSTO, UPPER(REPLACE(CONCEPTO, ' ', '')) COLLATE Latin1_General_CI_AI
+HAVING COUNT(*) > 1
+ORDER BY 1, 2;
+
+-- 3c. Un concepto escrito de distintas formas según el departamento
+--     (mayúsculas, tildes o espacios): debe quedar un solo nombre
+WITH formas AS (
+    SELECT z.FORMA, MIN(z.CLAVE) AS CLAVE,
+           STRING_AGG(z.DEPARTAMENTO, ',') WITHIN GROUP (ORDER BY z.DEPARTAMENTO) AS DEPTOS
+    FROM (SELECT DISTINCT DEPARTAMENTO,
+                 CONCEPTO COLLATE Latin1_General_CS_AS AS FORMA,
+                 UPPER(REPLACE(CONCEPTO, ' ', '')) COLLATE Latin1_General_CI_AI AS CLAVE
+          FROM dbo.CECO_CONCEPTO_TC WHERE ACTIVO = 1) z
+    GROUP BY z.FORMA
+)
+SELECT STRING_AGG(CAST(FORMA + N' (' + DEPTOS + N')' AS nvarchar(max)), N'  |  ') AS FORMAS_EN_USO
+FROM formas
+GROUP BY CLAVE
+HAVING COUNT(*) > 1;
+
+-- 3d. Centros de la ficha que no existen en el catálogo 2027 o que el
+--     departamento no tiene asignados ('0' = Gestión de Dirección, a propósito)
+SELECT t.DEPARTAMENTO, t.CENTRO_COSTO, c.DESCRIPCION_CC,
+       CASE WHEN c.CENTRO_COSTO IS NULL THEN 'No existe en el catálogo 2027'
+            ELSE 'No está asignado al departamento' END AS PROBLEMA,
+       STRING_AGG(t.CONCEPTO, ' | ') AS CONCEPTOS
+FROM dbo.CECO_CONCEPTO_TC t
+LEFT JOIN dbo.CENTROS_COSTOS_2027 c ON c.CENTRO_COSTO = t.CENTRO_COSTO
+WHERE t.ACTIVO = 1 AND t.CENTRO_COSTO <> '0'
+  AND (c.CENTRO_COSTO IS NULL OR NOT EXISTS (SELECT 1 FROM dbo.CECOS_DEPARTAMENTO_2027 d
+        WHERE d.DEPARTAMENTO = t.DEPARTAMENTO AND d.CENTRO_COSTO = t.CENTRO_COSTO))
+GROUP BY t.DEPARTAMENTO, t.CENTRO_COSTO, c.DESCRIPCION_CC, c.CENTRO_COSTO
+ORDER BY 1, 2;
+
+-- 3e. Horas guardadas en el plan TC con un centro o concepto que no está en
+--     la ficha (el usuario no las vería al abrir su plan)
+SELECT e.ORIGEN AS DEPARTAMENTO, e.HOJA_ORIGEN, e.CENTRO_COSTO, e.CONCEPTO, COUNT(*) AS FILAS
+FROM dbo.DATOS_ENTRADA e
+WHERE e.PRESUPUESTO = 'PPTO2027'
+  AND e.HOJA_ORIGEN IN ('1. Plan TC-I', 'Plan TC-II', 'Plan TC Transversales')
+  AND NOT EXISTS (SELECT 1 FROM dbo.CECO_CONCEPTO_TC t
+                  WHERE t.DEPARTAMENTO = e.ORIGEN AND t.CENTRO_COSTO = e.CENTRO_COSTO
+                    AND t.CONCEPTO COLLATE Latin1_General_CS_AS = e.CONCEPTO COLLATE Latin1_General_CS_AS
+                    AND t.ACTIVO = 1)
+GROUP BY e.ORIGEN, e.HOJA_ORIGEN, e.CENTRO_COSTO, e.CONCEPTO
+ORDER BY 1, 2, 3;
+
+-- 3f. Informativo: departamentos sin Gestión de Dirección en su ficha
+--     (DMAT la tiene como concepto de su centro de departamento, a propósito)
+SELECT d.CODIGO AS DEPARTAMENTO
+FROM dbo.Departamentos d
+WHERE NOT EXISTS (SELECT 1 FROM dbo.CECO_CONCEPTO_TC t
+                  WHERE t.DEPARTAMENTO = d.CODIGO AND t.ACTIVO = 1
+                    AND (t.CENTRO_COSTO = '0'
+                         OR t.CONCEPTO COLLATE Latin1_General_CI_AI = N'Gestion de Direccion'))
+ORDER BY 1;

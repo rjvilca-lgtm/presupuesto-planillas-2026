@@ -38,7 +38,7 @@ WHERE EXISTS (SELECT 1 FROM dbo.CENTROS_COSTOS_2027 c WHERE c.CENTRO_COSTO = a.C
 DECLARE @ficha TABLE (DEPARTAMENTO varchar(20), CENTRO_COSTO varchar(20), CONCEPTO nvarchar(200));
 INSERT INTO @ficha VALUES
     -- FACI
-    ('DCCOMP', '01.01.04.01.01', N'FACULTAD DE ARQUITECTURA, COMPUTACIÓN E INGENIERÍA'),
+    ('DCCOMP', '01.01.04.01.01', N'Facultad de Arquitectura, Computación e Ingeniería'),
     ('DCCOMP', '01.01.04.06.03', N'Servicio a Terceros'),
     -- Educación y Psicología
     ('DEDU',   '01.01.05.05.01', N'Gestión Administrativa Investigación'),
@@ -46,8 +46,8 @@ INSERT INTO @ficha VALUES
     ('DPSI',   '01.01.05.06.02', N'Proyectos Solidarios'),
     ('DEDU',   '01.01.05.06.04', N'Debate Público'),
     -- Humanidades, Matemática y Ciencias Naturales
-    ('DCN',    '01.01.07.01.01', N'Facultad de humanidades, matemática y ciencias naturales'),
-    ('DMAT',   '01.01.07.01.01', N'Facultad de humanidades, matemática y ciencias naturales'),
+    ('DCN',    '01.01.07.01.01', N'Facultad de Humanidades, Matemática y Ciencias Naturales'),
+    ('DMAT',   '01.01.07.01.01', N'Facultad de Humanidades, Matemática y Ciencias Naturales'),
     ('DCN',    '01.01.07.03.01', N'Gestión Administrativa Pregrado'),
     ('DMAT',   '01.01.07.03.01', N'Gestión Administrativa Pregrado'),
     ('DCN',    '01.01.07.04.01', N'Gestión Administrativa Postgrado'),
