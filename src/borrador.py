@@ -49,8 +49,26 @@ def _k(clave: str, que: str) -> str:
     return f"_borrador_{que}_{clave}"
 
 
+def confirmados() -> dict:
+    """Firma de lo último que esta sesión dejó guardado en la base, por planilla.
+    Como versiones(): es un dict común que se toma ANTES de guardar y se anota
+    justo después del COMMIT (sin pasar por st.session_state, que es donde
+    Streamlit corta la ejecución si llegó otro clic). Así, si el usuario pulsa
+    Guardar varias veces, la segunda pasada ya sabe que no queda nada por
+    guardar en vez de repetir el guardado."""
+    return st.session_state.setdefault("_borrador_confirmados", {})
+
+
+def ya_guardado(clave: str, firma_actual: str) -> bool:
+    """¿Lo que hay en pantalla es justo lo último que esta sesión guardó?"""
+    return confirmados().get(clave) == firma_actual
+
+
 def pendiente(clave: str, firma_actual: str) -> bool:
     """¿Hay cambios sin guardar? La primera firma de la sesión es la base."""
+    conf = confirmados().get(clave)
+    if conf is not None:   # guardado confirmado cuya marca no alcanzó a quedar
+        st.session_state[_k(clave, "firma")] = conf
     base = st.session_state.setdefault(_k(clave, "firma"), firma_actual)
     hay = firma_actual != base
     desde = _k(clave, "desde")
@@ -69,6 +87,7 @@ def forzar_pendiente(clave: str):
 
 
 def marcar_guardado(clave: str, firma_actual: str):
+    confirmados()[clave] = firma_actual
     st.session_state[_k(clave, "firma")] = firma_actual
     for k in [k for k in st.session_state if str(k).startswith("_precarga_")
               and clave.replace("|", "_") in str(k)]:
@@ -80,6 +99,7 @@ def marcar_guardado(clave: str, firma_actual: str):
 
 def olvidar(clave: str):
     """Para cuando la pantalla se recarga desde la base."""
+    confirmados().pop(clave, None)
     for que in ("firma", "desde", "hora"):
         st.session_state.pop(_k(clave, que), None)
     st.session_state.get("_borrador_pendientes", {}).pop(clave, None)

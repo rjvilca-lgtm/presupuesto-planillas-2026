@@ -353,7 +353,8 @@ def _ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guardado,
 
     if hay_cambios and not solo_lectura and toca_autoguardar(clave):
         autoguardar(clave, f_actual, _errores(),
-                    lambda: guardar_borrador(repo, hoja, origen, editado, usuario.email))
+                    lambda: guardar_borrador(repo, hoja, origen, editado, usuario.email,
+                                             firma_actual=f_actual))
         hay_cambios = pendiente(clave, f_actual)
     st.markdown('<div style="height:60px"></div>', unsafe_allow_html=True)
     with st.container(key=f"barra_guardar_{hoja}"):
@@ -371,13 +372,19 @@ def _ficha_tc(repo, fl, hoja, ccos, roster, estructura, origen, guardado,
             unsafe_allow_html=True)
         clic_guardar = c_btn.button("Guardar", type="primary", width="stretch",
                                     key=f"btn_guardar_{hoja}", disabled=solo_lectura)
-    if clic_guardar:
+    if clic_guardar and borrador.ya_guardado(clave, f_actual):
+        # Clic repetido: el guardado anterior ya dejó esto en la base
+        marcar_guardado(clave, f_actual)
+        st.session_state[f"_resultado_{hoja}"] = (True, YA_GUARDADO)
+        _rehacer_ficha()
+    elif clic_guardar:
         errores = _errores()
         if errores:
             _dialogo_errores(errores)
         else:
-            with st.spinner("Guardando…"):
-                ok, mensaje = guardar_borrador(repo, hoja, origen, editado, usuario.email)
+            with st.spinner(GUARDANDO):
+                ok, mensaje = guardar_borrador(repo, hoja, origen, editado, usuario.email,
+                                               firma_actual=f_actual)
             if ok:
                 marcar_guardado(clave, f_actual)
             if ok or not borrador.hay_conflicto(hoja, origen):   # el conflicto se muestra aparte
@@ -489,7 +496,7 @@ def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guard
     if hay_cambios and not solo_lectura and toca_autoguardar(clave):
         autoguardar(clave, f_actual, errores_de(),
                     lambda: guardar_borrador(repo, hoja, origen, editado, usuario.email, sps,
-                                             gestor))
+                                             gestor, firma_actual=f_actual))
         hay_cambios = pendiente(clave, f_actual)
 
     st.divider()
@@ -497,12 +504,17 @@ def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guard
     if st.button("Guardar", type="primary", width="stretch",
                  key=f"btn_guardar_{hoja}", disabled=solo_lectura):
         errores = errores_de()
-        if errores:
+        if borrador.ya_guardado(clave, f_actual):
+            # Clic repetido: el guardado anterior ya dejó esto en la base
+            marcar_guardado(clave, f_actual)
+            st.session_state[f"_resultado_{hoja}"] = (True, YA_GUARDADO)
+            st.rerun()
+        elif errores:
             _dialogo_errores(errores)
         else:
-            with st.spinner("Guardando…"):
+            with st.spinner(GUARDANDO):
                 resultado = guardar_borrador(repo, hoja, origen, editado, usuario.email,
-                                             sps, gestor)
+                                             sps, gestor, firma_actual=f_actual)
             if resultado[0]:
                 marcar_guardado(clave, f_actual)
             if resultado[0] or not borrador.hay_conflicto(hoja, origen):
@@ -510,7 +522,7 @@ def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guard
             st.rerun()
 
 
-def guardar_borrador(repo, hoja, origen, editado, email, sps=(), gestor=False):
+def guardar_borrador(repo, hoja, origen, editado, email, sps=(), gestor=False, firma_actual=None):
     """Guarda la planilla (sin valorizar, o valorizándola en la misma
     transacción si vienen sps). Devuelve (ok, mensaje). Si otra persona la
     guardó desde que esta sesión la abrió, no guarda: deja el aviso de
@@ -518,10 +530,17 @@ def guardar_borrador(repo, hoja, origen, editado, email, sps=(), gestor=False):
     cfg = cfg_de(hoja)
     filas, cols = preparar_filas(hoja, origen, editado, repo)
     versiones, clave = borrador.versiones(), f"{hoja}|{origen}"
+    confirmados = borrador.confirmados()
+
+    def al_confirmar(v):   # justo tras el COMMIT, sin st.* (ver borrador.confirmados)
+        versiones[clave] = v
+        if firma_actual is not None:
+            confirmados[clave] = firma_actual
+
     try:
         n, _ = repo.guardar_borrador(hoja, origen, filas, cols, email=email,
                                      version=versiones.get(clave), sps=sps,
-                                     al_confirmar=lambda v: versiones.__setitem__(clave, v))
+                                     al_confirmar=al_confirmar)
         if sps:
             momento = ahora()
             marcar(repo, origen, FECHA_GUARDADO=momento, FECHA_VALORIZACION=momento)
@@ -540,6 +559,10 @@ def guardar_borrador(repo, hoja, origen, editado, email, sps=(), gestor=False):
         return False, mensaje
     except Exception as ex:
         return False, f"No se guardó nada; se revirtió la operación. Detalle: {ex}"
+
+
+GUARDANDO = "Guardando… no hace falta volver a pulsar «Guardar»."
+YA_GUARDADO = "Ya está guardado: no hay cambios desde el último guardado."
 
 
 def mensaje_conflicto(etiqueta, c) -> str:

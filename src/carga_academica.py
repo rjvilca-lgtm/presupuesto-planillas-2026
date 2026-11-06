@@ -159,11 +159,17 @@ def registro_carga_academica(repo, fl, usuario=None):
     def _guardar():
         from .repositorio import ConflictoGuardado
         versiones, clave_v = borrador.versiones(), f"{CA['hoja']}|{DGA}"
+        confirmados = borrador.confirmados()
+
+        def al_confirmar(v):   # justo tras el COMMIT, sin st.* (ver borrador.confirmados)
+            versiones[clave_v] = v
+            confirmados[clave] = f_actual
+
         try:
             n, _ = repo.guardar_borrador(
                 CA["hoja"], DGA, _filas_destino(editado), COLS_DESTINO,
                 email=getattr(usuario, "email", None), version=versiones.get(clave_v),
-                al_confirmar=lambda v: versiones.__setitem__(clave_v, v))
+                al_confirmar=al_confirmar)
             marcar(repo, DGA, FECHA_GUARDADO=ahora())
             return True, f"{n} registro(s) de carga académica guardados."
         except ConflictoGuardado as c:
@@ -188,10 +194,16 @@ def registro_carga_academica(repo, fl, usuario=None):
     if c_guardar.button("Guardar", type="primary", width="stretch", disabled=bloqueado,
                         key="btn_guardar_carga_academica"):
         errores = _validar(editado, set(ccos["CODIGO_CECO"]))
-        if errores:
+        if borrador.ya_guardado(clave, f_actual):
+            # Clic repetido: el guardado anterior ya dejó esto en la base
+            marcar_guardado(clave, f_actual)
+            st.session_state["_resultado_carga_academica"] = (
+                True, "Ya está guardado: no hay cambios desde el último guardado.")
+            st.rerun()
+        elif errores:
             _dialogo_errores(errores)
         else:
-            with st.spinner("Guardando…"):
+            with st.spinner("Guardando… no hace falta volver a pulsar «Guardar»."):
                 res = _guardar()
             if res[0]:
                 marcar_guardado(clave, f_actual)
