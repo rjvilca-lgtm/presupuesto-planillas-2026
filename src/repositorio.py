@@ -498,6 +498,46 @@ def _conexion_lectura(server, port, database, user):
     return grupo
 
 
+# Conexiones de escritura reutilizadas: abrir una conexión TLS nueva en cada
+# guardado costaba ~1,2 s desde Streamlit Cloud. Con transacción (autocommit
+# OFF); cada guardado termina con COMMIT o ROLLBACK, así que vuelven al grupo
+# limpias. Dos: los guardados de distintas personas no se esperan entre sí.
+CONEXIONES_ESCRITURA = 2
+
+
+@st.cache_resource(show_spinner=False)
+def _grupo_escritura(server, port, database, user):
+    # LIFO: se reutiliza la última conexión usada (la que sigue abierta); la
+    # segunda solo se abre si dos personas guardan a la vez
+    grupo = queue.LifoQueue()
+    for _ in range(CONEXIONES_ESCRITURA):
+        grupo.put({"conn": None})
+    return grupo
+
+
+def _cerrar(conn) -> None:
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _conexion_caida(e: Exception) -> bool:
+    """¿El error es de una conexión que Azure ya cerró (y no de la consulta)?
+    Los errores que reporta SQL Server son pytds.tds_base.Error; todo lo demás
+    (OSError, OpenSSL.SSL.Error con «protocol is shutdown», EOF…) viene de la
+    red o del TLS."""
+    import pytds
+    if isinstance(e, pytds.tds_base.ClosedConnectionError):
+        return True
+    if not isinstance(e, pytds.tds_base.Error):
+        return True
+    texto = str(e).lower()
+    return any(m in texto for m in ("connection", "socket", "closed", "broken pipe",
+                                    "reset by peer", "transport"))
+
+
 def _consultar(server, port, database, user, password,
                sql: str, params: tuple) -> pd.DataFrame:
     grupo = _conexion_lectura(server, port, database, user)
@@ -1591,8 +1631,6 @@ class RepositorioSQL:
         Devuelve (filas, nueva versión o None)."""
         control = self._control_versiones()
         bitacora = self._hay_bitacora()
-        sql_delete = ("DELETE FROM DATOS_ENTRADA "
-                      "WHERE HOJA_ORIGEN = %s AND ORIGEN = %s AND PRESUPUESTO = %s")
         print(f"[guardar] {PRESUPUESTO} · {hoja} · {origen}: {len(filas)} fila(s)", flush=True)
         etapas, t0 = {}, time.perf_counter()
         marca = [t0]
@@ -1602,35 +1640,62 @@ class RepositorioSQL:
             etapas[nombre] = etapas.get(nombre, 0) + ahora - marca[0]
             marca[0] = ahora
 
-        with self._conn() as conn:
-            etapa("conexión")
-            cur = conn.cursor()
+        # Cada viaje a Azure (Brasil) cuesta ~0,2 s desde Streamlit Cloud: lo
+        # previo al INSERT va en un solo lote de T-SQL.
+        #  - ARITHABORT ON: los índices únicos filtrados de DATOS_ENTRADA
+        #    (sql/crear_indices_2027.sql) lo exigen a quien escribe; pytds lo
+        #    deja en OFF.
+        #  - Un solo guardado a la vez por planilla y departamento: dos
+        #    guardados cruzados (doble clic, dos pestañas) hacían DELETE,
+        #    DELETE, INSERT, INSERT y dejaban las filas duplicadas.
+        #  - Con GUARDADOS_2027, si otra persona guardó después de que esta
+        #    sesión abrió la planilla, no se borra nada (BORRADAS queda NULL).
+        previo = (
+            "SET ARITHABORT ON; "
+            "DECLARE @r int; EXEC @r = sp_getapplock @Resource = %s, "
+            "@LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 30000; "
+            "IF @r < 0 THROW 50020, "
+            "'Otro guardado de esta planilla está en curso; intenta de nuevo.', 1; "
+            "DECLARE @v int, @e nvarchar(400), @f datetime2, @borradas int; ")
+        params = [f"DATOS_ENTRADA|{PRESUPUESTO}|{hoja}|{origen}"]
+        if control:
+            previo += ("SELECT @v = VERSION, @e = EMAIL, @f = FECHA FROM GUARDADOS_2027 "
+                       "WHERE PRESUPUESTO = %s AND HOJA_ORIGEN = %s AND ORIGEN = %s; "
+                       "IF %s IS NULL OR ISNULL(@v, 0) = %s BEGIN ")
+            params += [PRESUPUESTO, hoja, origen, version, version]
+        previo += ("DELETE FROM DATOS_ENTRADA "
+                   "WHERE HOJA_ORIGEN = %s AND ORIGEN = %s AND PRESUPUESTO = %s; "
+                   "SET @borradas = @@ROWCOUNT; ")
+        params += [hoja, origen, PRESUPUESTO]
+        if control:
+            previo += "END "
+        previo += "SELECT ISNULL(@v, 0), @e, @f, @borradas;"
+
+        with self._conn_escritura() as abrir:
+            for intento in (1, 2):
+                conn, reusada = abrir(nueva=intento == 2)
+                etapa("conexión")
+                cur = conn.cursor()
+                try:
+                    cur.execute(previo, params)
+                    while cur.description is None and cur.nextset():
+                        pass
+                    actual, quien, cuando, borradas = cur.fetchone()
+                    break
+                except Exception as e:
+                    # Azure cierra las conexiones inactivas: si la reutilizada
+                    # ya no sirve, se abre otra una vez (aún no se escribió nada)
+                    if not reusada or not _conexion_caida(e):
+                        print(f"[guardar] ROLLBACK por error: {e!r}", flush=True)
+                        raise   # _conn_escritura revierte
+                    print(f"[guardar] la conexión guardada ya no servía ({e!r}); "
+                          "se abre otra", flush=True)
             try:
-                # Los índices únicos filtrados de DATOS_ENTRADA (sql/crear_indices_2027.sql)
-                # exigen ARITHABORT ON a quien escribe; pytds lo deja en OFF.
-                cur.execute("SET ARITHABORT ON;")
-                # Un solo guardado a la vez por planilla y departamento: dos
-                # guardados cruzados (doble clic, dos pestañas) hacían DELETE,
-                # DELETE, INSERT, INSERT y dejaban las filas duplicadas.
-                cur.execute(
-                    "DECLARE @r int; EXEC @r = sp_getapplock @Resource = %s, "
-                    "@LockMode = 'Exclusive', @LockOwner = 'Transaction', "
-                    "@LockTimeout = 30000; IF @r < 0 THROW 50020, "
-                    "'Otro guardado de esta planilla está en curso; intenta de nuevo.', 1;",
-                    [f"DATOS_ENTRADA|{PRESUPUESTO}|{hoja}|{origen}"])
-                etapa("bloqueo")
-                actual = None
-                if control:
-                    cur.execute("SELECT VERSION, EMAIL, FECHA FROM GUARDADOS_2027 "
-                                "WHERE PRESUPUESTO = %s AND HOJA_ORIGEN = %s AND ORIGEN = %s",
-                                [PRESUPUESTO, hoja, origen])
-                    fila = cur.fetchone()
-                    actual = int(fila[0]) if fila else 0
-                    if version is not None and actual != version:
-                        raise ConflictoGuardado(fila[1], fila[2])
-                cur.execute(sql_delete, [hoja, origen, PRESUPUESTO])
-                print(f"[guardar] DELETE previo: {cur.rowcount} fila(s)", flush=True)
-                etapa("delete")
+                actual = int(actual)
+                if borradas is None:
+                    raise ConflictoGuardado(quien, cuando)
+                print(f"[guardar] DELETE previo: {borradas} fila(s)", flush=True)
+                etapa("bloqueo y delete")
                 insertar_por_lotes(cur, "DATOS_ENTRADA", cols, filas)
                 print("[guardar] INSERT ok", flush=True)
                 etapa("insert")
@@ -1641,39 +1706,75 @@ class RepositorioSQL:
                         cur.execute(f"EXEC {sp}")
                     print(f"[guardar] EXEC {sp} ok", flush=True)
                     etapa("valorizar")
+                nueva = actual + 1 if control else None
+                lima = _hora_lima()
+                posterior, params = [], []
                 if control:
-                    lima = _hora_lima()
-                    cur.execute(
+                    posterior.append(
                         "MERGE GUARDADOS_2027 AS t USING (SELECT %s AS P, %s AS H, %s AS O) AS s "
                         "ON t.PRESUPUESTO = s.P AND t.HOJA_ORIGEN = s.H AND t.ORIGEN = s.O "
                         "WHEN MATCHED THEN UPDATE SET VERSION = %s, EMAIL = %s, FECHA = %s "
                         "WHEN NOT MATCHED THEN INSERT (PRESUPUESTO, HOJA_ORIGEN, ORIGEN, VERSION, "
-                        "EMAIL, FECHA) VALUES (s.P, s.H, s.O, %s, %s, %s);",
-                        [PRESUPUESTO, hoja, origen, actual + 1, email or "", lima,
-                         actual + 1, email or "", lima])
+                        "EMAIL, FECHA) VALUES (s.P, s.H, s.O, %s, %s, %s);")
+                    params += [PRESUPUESTO, hoja, origen, nueva, email or "", lima,
+                               nueva, email or "", lima]
                 if bitacora:
-                    cur.execute(
+                    posterior.append(
                         "INSERT INTO BITACORA_GUARDADOS_2027 (PRESUPUESTO, HOJA_ORIGEN, ORIGEN, "
                         "EMAIL, FECHA, FILAS, VERSION, VALORIZADO) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                        [PRESUPUESTO, hoja, origen, email, _hora_lima(), len(filas),
-                         actual + 1 if control else None, bool(sps)])
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s);")
+                    params += [PRESUPUESTO, hoja, origen, email, lima, len(filas), nueva,
+                               bool(sps)]
+                if posterior:
+                    cur.execute(" ".join(posterior), params)
                 etapa("versión y bitácora")
                 conn.commit()
                 etapa("commit")
-                nueva = actual + 1 if control else None
-                if al_confirmar:
-                    al_confirmar(nueva)
-                total = time.perf_counter() - t0
-                detalle = ", ".join(f"{k} {v:.1f}s" for k, v in etapas.items())
-                print(f"[guardar] COMMIT · total {total:.1f}s ({detalle})"
-                      f"{' LENTO' if total >= 3 else ''}", flush=True)
-                return len(filas), nueva
             except Exception as e:
-                conn.rollback()
                 print(f"[guardar] ROLLBACK por error: {e!r}", flush=True)
-                raise
+                raise   # _conn_escritura revierte
+        if al_confirmar:
+            al_confirmar(nueva)
+        total = time.perf_counter() - t0
+        detalle = ", ".join(f"{k} {v:.1f}s" for k, v in etapas.items())
+        print(f"[guardar] COMMIT · total {total:.1f}s ({detalle})"
+              f"{' LENTO' if total >= 3 else ''}", flush=True)
+        return len(filas), nueva
 
+    @contextmanager
+    def _conn_escritura(self):
+        """Presta una conexión de escritura del grupo (ver _grupo_escritura).
+        Entrega abrir(nueva=False) -> (conexión, reusada). Si algo queda a
+        medias (error al revertir), la conexión se descarta en vez de volver
+        al grupo."""
+        grupo = _grupo_escritura(self._server, self._port, self._database, self._user)
+        espacio = grupo.get()
+        actual = {"conn": None}
+
+        def abrir(nueva=False):
+            if nueva or espacio["conn"] is None:
+                _cerrar(espacio["conn"])
+                espacio["conn"] = None
+                actual["conn"] = _conectar_con_timeout(
+                    self._server, self._port, self._database, self._user, self._password)
+                espacio["conn"] = actual["conn"]
+                return actual["conn"], False
+            actual["conn"] = espacio["conn"]
+            return actual["conn"], True
+
+        try:
+            yield abrir
+        except BaseException:
+            # Tras un error, solo vuelve al grupo si quedó sin transacción abierta
+            try:
+                if actual["conn"] is not None:
+                    actual["conn"].rollback()
+            except Exception:
+                _cerrar(espacio["conn"])
+                espacio["conn"] = None
+            raise
+        finally:
+            grupo.put(espacio)
 
 @st.cache_resource
 def crear_repositorio():
