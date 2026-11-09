@@ -210,6 +210,36 @@ def leer(archivo, codigos: set) -> tuple[pd.DataFrame | None, list[str]]:
     return (None if errores else df), errores
 
 
+def _vacio(v) -> bool:
+    try:
+        if pd.isna(v):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return isinstance(v, str) and not v.strip()
+
+
+def _numero(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _distintos(va, vn) -> bool:
+    """Compara un valor de la base con el del Excel. Vacío, NULL y NaN valen
+    lo mismo (una categoría NULL en la base llega como NaN y en el Excel
+    como ''; antes se intentaba float('') y la importación fallaba). Si los
+    dos son números, se comparan con tolerancia; si no, como texto."""
+    if _vacio(va) and _vacio(vn):
+        return False
+    fa, fn = _numero(0 if _vacio(va) else va), _numero(0 if _vacio(vn) else vn)
+    if fa is not None and fn is not None:
+        return abs(fa - fn) > 0.005
+    texto = lambda v: "" if _vacio(v) else " ".join(str(v).split())
+    return texto(va) != texto(vn)
+
+
 def contar_movimientos(actual: pd.DataFrame, nuevo: pd.DataFrame, campos: list[str]) -> dict:
     """Altas, bajas y cambios por DNI (solo conteos: la app no muestra datos)."""
     a = actual.drop_duplicates("DNI").set_index("DNI")
@@ -217,14 +247,7 @@ def contar_movimientos(actual: pd.DataFrame, nuevo: pd.DataFrame, campos: list[s
     cambios = 0
     for dni in set(a.index) & set(n.index):
         for c in campos:
-            va, vn = a.at[dni, c], n.at[dni, c]
-            if isinstance(va, (int, float)) or isinstance(vn, (int, float)):
-                va = 0.0 if va is None or pd.isna(va) else float(va)
-                vn = 0.0 if vn is None or pd.isna(vn) else float(vn)
-                distinto = abs(va - vn) > 0.005
-            else:
-                distinto = " ".join(str(va or "").split()) != " ".join(str(vn or "").split())
-            if distinto:
+            if _distintos(a.at[dni, c], n.at[dni, c]):
                 cambios += 1
                 break
     return {"altas": len(set(n.index) - set(a.index)),
