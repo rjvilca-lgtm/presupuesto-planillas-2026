@@ -5,8 +5,11 @@ de la app y volver a cargarla.
 La plantilla sale de la ficha tal como está en pantalla (padrón del
 departamento × estructura CECO -> concepto, con las horas ya registradas):
 una fila por docente, centro de costo y concepto. Solo se llena la columna
-HORAS, en hh:mm. Las horas cronológicas de dictado no van: se calculan de las
-académicas (× 45/60), igual que en la ficha. La hoja Resumen suma lo de cada
+HORAS, en hh:mm. Las horas de dictado se llenan en académicas O en
+cronológicas: la fila de cronológicas trae la fórmula académicas × 45/60 y
+quien prefiere cuadrar con cronológicas la sobrescribe y deja vacías las
+académicas (al cargar, las académicas se calculan × 60/45). Si las dos están
+llenas y no coinciden, no se carga nada. La hoja Resumen suma lo de cada
 docente con fórmulas para ver, sin la app, a quién le faltan horas.
 
 Al cargarla, la app solo pasa las horas a la ficha (no guarda): se revisan y
@@ -38,18 +41,24 @@ _AZUL, _EDITABLE = "17233B", "FFF7E0"
 def plantilla(ledger: pd.DataFrame, hoja: str, origen: str, desc_ceco: dict) -> bytes:
     """Excel de la ficha de un semestre y departamento, con las horas actuales."""
     cfg = cfg_de(hoja)
-    filas = ledger[~ledger["CONCEPTO"].map(lambda c: es_concepto(c, CONCEPTO_CRONOLOGICAS))]
+    filas = ledger
+    # Fila de las académicas de cada (docente, centro): la de cronológicas la usa
+    pos = {}
+    for r, fila in enumerate(filas.itertuples(index=False), start=FILA_CABECERA + 1):
+        if es_concepto(fila.CONCEPTO, CONCEPTO_ACADEMICAS):
+            pos[(str(fila.DNI), str(fila.CENTRO_COSTO))] = r
     wb = Workbook()
     ws = wb.active
     ws.title = HOJA
     ws["A1"] = f"{cfg['etiqueta']} · {origen}"
     ws["A1"].font = Font(bold=True, size=13)
     ws["A2"] = ("Llena solo la columna HORAS (amarilla) en hh:mm, por ejemplo 03:30. "
-                "Las horas académicas de dictado se convierten solas a cronológicas "
-                "(× 45/60). Revisa la hoja Resumen antes de cargar el archivo en la app.")
+                "Horas de dictado: llena las académicas (las cronológicas se calculan "
+                "× 45/60) O escribe directo las cronológicas y deja vacías las académicas; "
+                "no las dos. Revisa la hoja Resumen antes de cargar el archivo en la app.")
     ws["A2"].alignment = Alignment(wrap_text=True, vertical="top")
     ws.merge_cells("A2:F2")
-    ws.row_dimensions[2].height = 32
+    ws.row_dimensions[2].height = 44
     for i, (titulo, ancho) in enumerate(zip(CABECERAS, [12, 38, 18, 44, 40, 14]), start=1):
         c = ws.cell(row=FILA_CABECERA, column=i, value=titulo)
         c.font = Font(bold=True, color="FFFFFF")
@@ -66,7 +75,12 @@ def plantilla(ledger: pd.DataFrame, hoja: str, origen: str, desc_ceco: dict) -> 
         ws.cell(row=r, column=3, value=str(fila.CENTRO_COSTO)).number_format = "@"
         ws.cell(row=r, column=4, value=desc_ceco.get(fila.CENTRO_COSTO, fila.CENTRO_COSTO))
         ws.cell(row=r, column=5, value=fila.CONCEPTO)
-        h = ws.cell(row=r, column=6, value=float(fila.HORAS or 0) / 24)
+        acad = pos.get((str(fila.DNI), str(fila.CENTRO_COSTO)))
+        if es_concepto(fila.CONCEPTO, CONCEPTO_CRONOLOGICAS) and acad:
+            valor = f"=F{acad}*{FACTOR_CRONOLOGICAS}"   # se puede sobrescribir
+        else:
+            valor = float(fila.HORAS or 0) / 24
+        h = ws.cell(row=r, column=6, value=valor)
         h.number_format = _FORMATO_HORAS
         h.fill = PatternFill("solid", fgColor=_EDITABLE)
         h.protection = Protection(locked=False)
@@ -120,14 +134,13 @@ def _resumen(wb, ledger: pd.DataFrame, ultima: int):
         ws.cell(row=r, column=3, value=float(d.HORAS_META) / 24).number_format = _FORMATO_HORAS
         ws.cell(row=r, column=4, value=(
             f'=SUMIFS({horas},{dni},A{r},{concepto},"<>{CONCEPTO_ACADEMICAS}")'
-            f'+SUMIFS({horas},{dni},A{r},{concepto},"{CONCEPTO_ACADEMICAS}")'
-            f"*{FACTOR_CRONOLOGICAS}")).number_format = _FORMATO_HORAS
+            )).number_format = _FORMATO_HORAS
         ws.cell(row=r, column=5, value=f"=ROUND((C{r}-D{r})*24,2)").number_format = "0.00"
         ws.cell(row=r, column=6,
                 value=f'=IF(ABS(E{r})<=0.01,"Completo",IF(E{r}>0,"Faltan","Sobran"))')
     ws.cell(row=len(docentes) + 3, column=1,
             value="Diferencia: horas que faltan (positivo) o sobran (negativo), en horas "
-                  "decimales. Las académicas cuentan × 45/60.").font = Font(italic=True)
+                  "decimales. Las académicas no suman: cuentan sus cronológicas.").font =         Font(italic=True)
 
 
 def _horas(valor) -> float | None:
@@ -183,6 +196,7 @@ def leer(archivo, ledger: pd.DataFrame, hoja: str, origen: str):
     indice = {(str(d), str(c), str(k).strip().lower()): i for i, d, c, k in zip(
         nuevo.index, nuevo["DNI"], nuevo["CENTRO_COSTO"], nuevo["CONCEPTO"])}
     errores, vistos, cambios = [], set(), 0
+    cron_excel = {}   # (DNI, centro) -> (fila, cronológicas escritas en el Excel)
     for r, fila in enumerate(ws.iter_rows(min_row=FILA_CABECERA + 1, values_only=True),
                              start=FILA_CABECERA + 1):
         if fila is None or all(v is None or str(v).strip() == "" for v in fila):
@@ -190,8 +204,6 @@ def leer(archivo, ledger: pd.DataFrame, hoja: str, origen: str):
         dni = normalizar_dni(fila[i_dni])
         ceco = str(fila[i_ceco] or "").strip()
         concepto = str(fila[i_con] or "").strip()
-        if es_concepto(concepto, CONCEPTO_CRONOLOGICAS):
-            continue                          # se calcula de las académicas
         clave = (dni, ceco, concepto.lower())
         if clave not in indice:
             errores.append(f"Fila {r}: el docente {dni or '(sin DNI)'} con el centro de costo "
@@ -202,6 +214,16 @@ def leer(archivo, ledger: pd.DataFrame, hoja: str, origen: str):
             errores.append(f"Fila {r}: el docente {dni}, {ceco} · {concepto} está repetido.")
             continue
         vistos.add(clave)
+        if es_concepto(concepto, CONCEPTO_CRONOLOGICAS):
+            # Vacía (o fórmula sin calcular) = se calculan de las académicas
+            if fila[i_h] is not None and str(fila[i_h]).strip() != "":
+                valor = _horas(fila[i_h])
+                if valor is None or valor < 0 or valor > MAX_HORAS:
+                    errores.append(f"Fila {r}: «{fila[i_h]}» no es una hora válida para el "
+                                   f"docente {dni}. Usa hh:mm, por ejemplo 03:30.")
+                else:
+                    cron_excel[(dni, ceco)] = (r, valor)
+            continue
         valor = _horas(fila[i_h])
         if valor is None or valor < 0 or valor > MAX_HORAS:
             errores.append(f"Fila {r}: «{fila[i_h]}» no es una hora válida para el docente "
@@ -212,17 +234,36 @@ def leer(archivo, ledger: pd.DataFrame, hoja: str, origen: str):
         if abs(float(nuevo.at[i, "HORAS"] or 0) - valor) > 1e-9:
             cambios += 1
         nuevo.at[i, "HORAS"] = valor
+    # Dictado: académicas o cronológicas, una de las dos
+    es_acad = nuevo["CONCEPTO"].map(lambda c: es_concepto(c, CONCEPTO_ACADEMICAS))
+    es_cron = nuevo["CONCEPTO"].map(lambda c: es_concepto(c, CONCEPTO_CRONOLOGICAS))
+    i_acad = {(str(d), str(c)): i for i, d, c in zip(
+        nuevo.index[es_acad], nuevo.loc[es_acad, "DNI"], nuevo.loc[es_acad, "CENTRO_COSTO"])}
+    for (dni, ceco), (r, cron) in cron_excel.items():
+        i = i_acad.get((dni, ceco))
+        acad = float(nuevo.at[i, "HORAS"] or 0) if i is not None else 0.0
+        if acad > 0 and abs(acad * FACTOR_CRONOLOGICAS - cron) > 1 / 60 + 1e-9:
+            errores.append(f"Fila {r}: el docente {dni} ({ceco}) tiene llenas las horas "
+                           "académicas y las cronológicas y no coinciden (cronológicas = "
+                           "académicas × 45/60). Llena solo una de las dos.")
+        elif acad == 0 and cron > 0:
+            if i is None:
+                errores.append(f"Fila {r}: el docente {dni} ({ceco}) no tiene horas "
+                               "académicas en la ficha para calcularlas de las cronológicas.")
+                continue
+            # Las académicas se guardan siempre: las usa la valorización de la carga
+            # académica. Al minuto: × 45/60 vuelve a dar las cronológicas escritas.
+            nuevo.at[i, "HORAS"] = a_minutos(cron / FACTOR_CRONOLOGICAS)
+            cambios += 1
     if errores:
         return None, errores, ""
     if not vistos:
         return None, ["El archivo no tiene filas con docentes."], ""
 
-    # Cronológicas = académicas × 45/60, por docente y centro de costo
-    es_acad = nuevo["CONCEPTO"].map(lambda c: es_concepto(c, CONCEPTO_ACADEMICAS))
-    es_cron = nuevo["CONCEPTO"].map(lambda c: es_concepto(c, CONCEPTO_CRONOLOGICAS))
+    # Cronológicas = académicas × 45/60, al minuto como en la ficha
     acad = nuevo[es_acad].set_index(["DNI", "CENTRO_COSTO"])["HORAS"]
     claves = list(zip(nuevo.loc[es_cron, "DNI"], nuevo.loc[es_cron, "CENTRO_COSTO"]))
-    nuevo.loc[es_cron, "HORAS"] = [float(acad.get(k, 0.0)) * FACTOR_CRONOLOGICAS
+    nuevo.loc[es_cron, "HORAS"] = [a_minutos(float(acad.get(k, 0.0)) * FACTOR_CRONOLOGICAS)
                                    for k in claves]
     docentes = len({d for d, _, _ in vistos})
     return nuevo, [], (f"{len(vistos)} fila(s) de {docentes} docente(s); "
