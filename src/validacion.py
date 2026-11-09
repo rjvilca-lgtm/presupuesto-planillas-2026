@@ -8,7 +8,7 @@ dinámico se ignoran) y se estima el monto para el feedback en vivo.
 
 import pandas as pd
 
-from .config import (CONCEPTO_ACADEMICAS, MESES, TOLERANCIA_HORAS, a_hhmm,
+from .config import (CONCEPTO_ACADEMICAS, MESES, TOLERANCIA_HORAS, a_hhmm, a_minutos,
                      cfg_de, dims_fila, es_concepto, meta_horas)
 
 
@@ -130,12 +130,15 @@ def _validar_plan_tc(sub: pd.DataFrame, val: pd.DataFrame) -> list[str]:
     de HORAS_DOCENTES; 40 si no hay dato) en horas cronológicas. Las
     académicas no cuentan: ya están en las cronológicas."""
     cronologicas = ~sub["CONCEPTO"].map(lambda c: es_concepto(c, CONCEPTO_ACADEMICAS))
-    total = val[cronologicas].sum(axis=1).groupby(sub.loc[cronologicas, "DNI"]).sum()
+    # Al minuto, como en la ficha: lo guardado tiene 2 decimales (00:25 = 0.42)
+    # y sumado tal cual daba 40.01 en docentes que en la ficha suman 40:00
+    total = (val[cronologicas].apply(pd.to_numeric, errors="coerce").fillna(0.0).map(a_minutos)
+             .sum(axis=1).groupby(sub.loc[cronologicas, "DNI"]).sum())
     total = total.reindex(sub["DNI"].unique(), fill_value=0.0)
     unicos = sub.drop_duplicates("DNI").set_index("DNI")
     metas = (unicos["HORAS_META"] if "HORAS_META" in unicos
              else pd.Series(index=unicos.index, dtype=float)).map(meta_horas)
-    malos = total[(total - metas.reindex(total.index)).abs() > TOLERANCIA_HORAS]
+    malos = total[(total - metas.reindex(total.index)).abs() > TOLERANCIA_HORAS + 1e-9]
     if malos.empty:
         return []
     detalle = [f"{unicos['NOMBRE'].get(dni, dni)} ({a_hhmm(h)} de {a_hhmm(metas[dni])})"

@@ -623,7 +623,7 @@ def _normalizar_hhmm(key: str):
 
 
 def _completo(horas: float, meta: float) -> bool:
-    return abs(horas - meta) <= TOLERANCIA_HORAS
+    return abs(horas - meta) <= TOLERANCIA_HORAS + 1e-9
 
 
 def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
