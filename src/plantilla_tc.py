@@ -22,7 +22,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill, Protection
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from .config import (CONCEPTO_ACADEMICAS, CONCEPTO_CRONOLOGICAS, FACTOR_CRONOLOGICAS,
+from .config import (a_minutos, CONCEPTO_ACADEMICAS, CONCEPTO_CRONOLOGICAS, FACTOR_CRONOLOGICAS,
                      cfg_de, de_hhmm, es_concepto)
 from .plantillas import _norm, normalizar_dni
 
@@ -131,8 +131,14 @@ def _resumen(wb, ledger: pd.DataFrame, ultima: int):
 
 
 def _horas(valor) -> float | None:
-    """Lo que Excel devuelve en una celda de horas -> horas en decimal.
-    None si no se entiende."""
+    """Lo que Excel devuelve en una celda de horas -> horas en decimal, al
+    minuto (las horas de Excel son fracciones de día: 0.4166666…7). None si
+    no se entiende."""
+    h = _horas_excel(valor)
+    return None if h is None else a_minutos(h)
+
+
+def _horas_excel(valor) -> float | None:
     if valor is None or (isinstance(valor, str) and not valor.strip()):
         return 0.0
     if isinstance(valor, timedelta):

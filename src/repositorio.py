@@ -1834,6 +1834,20 @@ def sps_departamento() -> list[tuple]:
     return sps
 
 
+def _horas_tc_en_centesimas(largo: pd.DataFrame) -> pd.DataFrame:
+    """Plan TC: HORAS va a decimal(10,2). Por docente y mes, las horas que
+    suman al total (todas menos las académicas) se redondean de modo que su
+    suma siga siendo la exacta (40:00 -> 40.00, no 40.01)."""
+    from .config import CONCEPTO_ACADEMICAS, centesimas_que_suman, es_concepto
+    largo = largo.copy()
+    academicas = largo["CONCEPTO"].map(lambda c: es_concepto(c, CONCEPTO_ACADEMICAS))
+    largo.loc[academicas, "HORAS"] = largo.loc[academicas, "HORAS"].round(2)
+    resto = largo[~academicas]
+    for _, idx in resto.groupby(["DNI", "MES"]).groups.items():
+        largo.loc[idx, "HORAS"] = centesimas_que_suman(largo.loc[idx, "HORAS"])
+    return largo[largo["HORAS"] > 0]
+
+
 def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list, list]:
     """Derrite la matriz (meses en columnas) a formato largo para DATOS_ENTRADA:
     un registro por cada celda mensual con valor > 0. Aplica la tarifa desde el
@@ -1855,6 +1869,8 @@ def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list
     largo[metrica] = pd.to_numeric(largo[metrica], errors="coerce").fillna(0.0)
     largo = largo[largo[metrica] > 0]              # solo celdas con valor
     largo["MES"] = largo["MES"].map(lambda m: str(MESES.index(m) + 1))
+    if cfg.get("mes_carga") and metrica == "HORAS" and "DNI" in largo:
+        largo = _horas_tc_en_centesimas(largo)
 
     cols = ["PRESUPUESTO", "HOJA_ORIGEN", "ORIGEN"] + cfg["dimensiones"] + [destino]
     if cfg.get("guardar_importe"):

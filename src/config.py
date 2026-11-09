@@ -120,6 +120,27 @@ def meta_horas(valor) -> float:
     return v if v > 0 else float(HORAS_PLAN_TC)
 
 
+def a_minutos(horas) -> float:
+    """Horas al minuto más cercano: 0.42 -> 0.41666… (00:25). DATOS_ENTRADA.HORAS
+    es decimal(10,2) y no guarda exactos los minutos; al leerlas de vuelta
+    se ajustan al minuto para que la ficha sume lo que muestra."""
+    return round(float(horas) * 60) / 60
+
+
+def centesimas_que_suman(valores) -> list[float]:
+    """Redondea a 2 decimales sin que la suma se desvíe: la suma de lo
+    redondeado es la suma exacta redondeada (método del mayor resto). Así
+    40:00 repartidas en minutos (00:25 = 0.41666…) quedan 40.00 en la base y
+    no 40.01 por redondear cada campo hacia arriba."""
+    exactos = [float(v) * 100 for v in valores]
+    base = [int(v // 1) for v in exactos]
+    faltan = round(sum(exactos)) - sum(base)
+    orden = sorted(range(len(exactos)), key=lambda i: exactos[i] - base[i], reverse=True)
+    for i in orden[:max(0, faltan)]:
+        base[i] += 1
+    return [b / 100 for b in base]
+
+
 def a_hhmm(horas: float) -> str:
     """3.5 -> '03:30'. La ficha muestra y recibe las horas en este formato;
     en la base se guardan en decimal."""

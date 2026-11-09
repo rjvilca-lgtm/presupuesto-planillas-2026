@@ -22,7 +22,8 @@ import streamlit as st
 from .repositorio import matriz_desde_entrada
 from .config import (CONCEPTO_ACADEMICAS, CONCEPTO_CRONOLOGICAS, FACTOR_CRONOLOGICAS,
                      HORAS_PLAN_TC, MESES, MESES_ABBR, SEMESTRES, TOLERANCIA_HORAS,
-                     a_hhmm, cfg_de, de_hhmm, dims_fila, es_concepto, etiqueta_dim, meta_horas)
+                     a_hhmm, a_minutos, cfg_de, de_hhmm, dims_fila, es_concepto, etiqueta_dim,
+                     meta_horas)
 from .validacion import formato_soles
 
 
@@ -595,6 +596,8 @@ def _semilla_ficha(roster: pd.DataFrame, estructura: pd.DataFrame,
                          ignore_index=True)
         base["NOMBRE"] = base["NOMBRE"].fillna(base["NOMBRE_g"])
         base["HORAS"] = base["HORAS_G"].fillna(base["HORAS"]).fillna(0.0)
+        # Lo guardado viene con 2 decimales (0.42): se ajusta al minuto (00:25)
+        base["HORAS"] = pd.to_numeric(base["HORAS"], errors="coerce").fillna(0.0).map(a_minutos)
         # Un solo nombre por DNI (el del padrón): la lista agrupa por DNI y nombre
         base["NOMBRE"] = base["DNI"].map(base.groupby("DNI", sort=False)["NOMBRE"].first())
         metas = base.groupby("DNI")["HORAS_META"].first()
@@ -782,7 +785,8 @@ def ficha_docente(cfg: dict, ccos: pd.DataFrame, estructura: pd.DataFrame,
                         key = f"h_{estado_key}_{dni_sel}_{ceco}_{concepto}"
                         if es_concepto(concepto, CONCEPTO_CRONOLOGICAS):
                             # Calculada, no editable: se fija antes de crear el widget
-                            valor = academicas * FACTOR_CRONOLOGICAS
+                            # Al minuto: lo que se ve es lo que suma y se guarda
+                            valor = a_minutos(academicas * FACTOR_CRONOLOGICAS)
                             st.session_state[key] = a_hhmm(valor)
                             col.text_input(
                                 str(concepto), key=key, disabled=True,
