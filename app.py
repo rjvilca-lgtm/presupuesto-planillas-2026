@@ -40,6 +40,29 @@ def _recargar_src_si_cambio():
     nuevo._huella = huella
 
 
+def _recargar_app_si_cambio():
+    """Con fileWatcherType = "none", Streamlit guarda compilado el app.py y no
+    se entera de que cambió con un push: seguía corriendo el app.py viejo con
+    el src/ nuevo (pasó con el rol Postgrado: st.tabs([]) sin pestañas). Si el
+    archivo cambió desde la última ejecución, se olvida lo compilado y se
+    vuelve a ejecutar con el nuevo. Usa un atributo interno de Streamlit: si
+    no existe (otra versión, AppTest), no hace nada."""
+    try:
+        from streamlit.runtime import Runtime
+        rt = Runtime.instance()
+        mtime = Path(__file__).stat().st_mtime_ns
+        previa = getattr(rt, "_mtime_app_py", None)
+        rt._mtime_app_py = mtime
+        if previa is None or previa == mtime:
+            return
+        rt._script_cache.clear()
+        print("[app] app.py cambió: se vuelve a compilar", flush=True)
+    except Exception:
+        return
+    st.rerun()
+
+
+_recargar_app_si_cambio()
 _recargar_src_si_cambio()
 
 from src.auth import barra_usuario, exigir_login
@@ -116,6 +139,10 @@ def _main(contexto):
                                              lambda: vista_diagnostico(repo))))
     # Solo se ejecuta la pestaña abierta: las demás no consultan la base ni
     # dibujan nada hasta que se abren (lo editado y no guardado sigue en la sesión)
+    if not pestañas:   # un rol que esta versión no conoce: avisar, no romper
+        st.warning("Tu acceso no tiene pantallas en esta versión de la app. Recarga la "
+                   "página; si sigue igual, avisa a la Oficina de Presupuesto.", icon="⚠️")
+        return
     tabs = st.tabs([t for t, _ in pestañas], on_change="rerun", key="nav_principal")
     for tab, (titulo, vista) in zip(tabs, pestañas):
         if tab.open:
