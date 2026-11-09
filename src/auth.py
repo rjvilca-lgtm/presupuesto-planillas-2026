@@ -13,7 +13,9 @@ académicas, sql/crear_areas_2027.sql) registra las ayudantías de su área e
 INVESTIGACION (gestor de investigación, sql/crear_rol_investigacion.sql)
 registra la planilla de Investigación de sus departamentos (el departamento
 también puede modificarla y la valoriza) y PUESTOS (sql/crear_puestos_nuevos_2027.sql)
-registra los puestos nuevos de su departamento o área.
+registra los puestos nuevos de su departamento o área. POSTGRADO
+(sql/crear_rol_postgrado.sql) ve, en solo lectura, la planilla de Postgrado
+de todos los departamentos.
 
 Probar como: un usuario PRESUPUESTO puede ver la app con los permisos de otro
 correo (Administración › Usuarios) para revisar qué ve y qué puede hacer.
@@ -43,25 +45,34 @@ class Usuario:
     areas: list = field(default_factory=list)   # áreas no académicas (ayudantías)
     investigacion: list = field(default_factory=list)   # gestor: planilla Investigación
     puestos: list = field(default_factory=list)   # departamentos o áreas: puestos nuevos
+    postgrado: bool = False   # ve (solo lectura) la planilla de Postgrado de todos
     probando_como: str | None = None   # correo cuyos permisos se están probando
     sin_rrhh: bool = False             # se le quitó Desarrollo Humano al probar
 
     @property
     def tiene_acceso(self) -> bool:
         return (self.presupuesto or self.dga or self.rrhh or bool(self.departamentos)
-                or bool(self.areas) or bool(self.investigacion) or bool(self.puestos))
+                or bool(self.areas) or bool(self.investigacion) or bool(self.puestos)
+                or self.postgrado)
 
     @property
     def solo_investigacion(self) -> bool:
-        """Gestor de investigación o de puestos sin otro rol: solo ve lo suyo."""
-        return bool(self.investigacion or self.puestos) and not (
+        """Gestor de investigación, de puestos o rol Postgrado sin otro rol:
+        solo ve lo suyo."""
+        return bool(self.investigacion or self.puestos or self.postgrado) and not (
             self.presupuesto or self.dga or self.rrhh or self.departamentos or self.areas)
 
     def planillas_de(self, depto: str) -> list | None:
         """Planillas que puede abrir en el departamento (None = todas)."""
         if self.presupuesto or depto in self.departamentos:
             return None
-        return ["Investigacion"] if depto in self.investigacion else []
+        return ((["Investigacion"] if depto in self.investigacion else [])
+                + (["Postgrado"] if self.postgrado else []))
+
+    def solo_ver(self, depto: str, hoja: str) -> bool:
+        """La abre solo por el rol Postgrado: puede verla, no modificarla."""
+        return (hoja == "Postgrado" and self.postgrado and not self.presupuesto
+                and depto not in self.departamentos)
 
 
 def _secrets_tiene(seccion: str) -> bool:
@@ -190,6 +201,8 @@ def _con_permisos(usuario: Usuario, filas) -> Usuario:
             usuario.investigacion.append(f["DEPARTAMENTO"])
         elif f["ROL"] == "PUESTOS" and f["DEPARTAMENTO"]:
             usuario.puestos.append(f["DEPARTAMENTO"])
+        elif f["ROL"] == "POSTGRADO":
+            usuario.postgrado = True
     return usuario
 
 
@@ -223,7 +236,7 @@ def roles_texto(usuario: Usuario) -> str:
     roles = (["Presupuesto"] if usuario.presupuesto else []) + \
             (["DGA"] if usuario.dga else []) + \
             (["Desarrollo Humano"] if usuario.rrhh else []) + usuario.departamentos + \
-            usuario.areas + [f"Investigación {d}" for d in usuario.investigacion] +             [f"Puestos {d}" for d in usuario.puestos]
+            usuario.areas + [f"Investigación {d}" for d in usuario.investigacion] +             [f"Puestos {d}" for d in usuario.puestos] +             (["Postgrado (todos los departamentos)"] if usuario.postgrado else [])
     return ", ".join(roles)
 
 

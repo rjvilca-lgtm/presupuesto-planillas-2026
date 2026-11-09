@@ -330,7 +330,8 @@ def _dialogo_cerrar(repo, origen):
 # ---------------------------------------------------------- administración
 
 ROLES = {"DEPARTAMENTO": "Departamento", "INVESTIGACION": "Investigación (gestor)",
-         "AREA": "Área (ayudantías)", "PUESTOS": "Puestos nuevos", "DGA": "DGA",
+         "AREA": "Área (ayudantías)", "PUESTOS": "Puestos nuevos",
+         "POSTGRADO": "Postgrado (ver todos)", "DGA": "DGA",
          "DESARROLLO_HUMANO": "Desarrollo Humano", "PRESUPUESTO": "Presupuesto"}
 # Roles que van con un código de departamento o de área
 ROLES_CON_CODIGO = ("DEPARTAMENTO", "INVESTIGACION", "AREA", "PUESTOS")

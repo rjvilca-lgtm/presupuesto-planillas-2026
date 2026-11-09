@@ -91,7 +91,8 @@ def _main(contexto):
 
     # Cada rol ve solo sus pestañas; la consulta de carga académica, todos
     pestañas = []
-    if usuario.presupuesto or usuario.departamentos or usuario.investigacion:
+    if (usuario.presupuesto or usuario.departamentos or usuario.investigacion
+            or usuario.postgrado):
         pestañas.append(("Presupuesto por departamento",
                          lambda: vista_departamentos(repo, fl, usuario)))
     if usuario.presupuesto or usuario.areas:
@@ -129,13 +130,19 @@ def _main(contexto):
 
 def vista_departamentos(repo, fl, usuario):
     # Presupuesto ve todos los departamentos; los demás, solo los suyos (el
-    # gestor de investigación, solo la planilla de Investigación)
-    permitidos = None if usuario.presupuesto else list(
+    # gestor de investigación, solo la planilla de Investigación; el rol
+    # Postgrado, la de Postgrado de todos, en solo lectura)
+    permitidos = None if usuario.presupuesto or usuario.postgrado else list(
         dict.fromkeys(usuario.departamentos + usuario.investigacion))
     origen, seleccion = selector_contexto(repo, permitidos, usuario.planillas_de)
     st.session_state["_pantalla_detalle"] = f"{origen} · {seleccion}"
-    panel_flujo(fl)
-    solo_lectura = aviso_departamento(fl, origen)
+    if usuario.solo_ver(origen, seleccion):
+        st.info(f"Consultas la planilla de Postgrado de {origen} en solo lectura. La "
+                "registra y valoriza el departamento.", icon="🎓")
+        solo_lectura = True
+    else:
+        panel_flujo(fl)
+        solo_lectura = aviso_departamento(fl, origen)
 
     ccos = repo.centros_costo(origen)
     if ccos.empty:
