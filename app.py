@@ -48,7 +48,7 @@ from src.borrador import (aviso_al_salir, autoguardar, firma, marcar_guardado,
                           mostrar_indicador, indicador, pendiente, toca_autoguardar)
 from src.diagnostico import iniciar_medicion, iniciar_vigilante, registrar, vista_diagnostico
 from src.carga_academica import consulta_carga_academica, registro_carga_academica
-from src.config import MESES, PUESTOS_NUEVOS, cfg_de, dims_fila
+from src.config import MESES, PUESTOS_NUEVOS, cfg_de, dims_fila, es_ceco_postgrado
 from src.flujo import (aviso_departamento, leer_flujo, marcar, ahora, panel_flujo,
                        vista_admin, vista_resumen)
 from src.reporte import vista_reporte
@@ -137,8 +137,10 @@ def vista_departamentos(repo, fl, usuario):
     origen, seleccion = selector_contexto(repo, permitidos, usuario.planillas_de)
     st.session_state["_pantalla_detalle"] = f"{origen} · {seleccion}"
     if usuario.solo_ver(origen, seleccion):
-        st.info(f"Consultas la planilla de Postgrado de {origen} en solo lectura. La "
-                "registra y valoriza el departamento.", icon="🎓")
+        que = ("el Plan de trabajo TC (solo los centros de postgrado y los docentes con "
+               "horas en ellos)" if seleccion == "TC" else "la planilla de Postgrado")
+        st.info(f"Consultas {que} de {origen} en solo lectura. Lo registra y valoriza el "
+                "departamento.", icon="🎓")
         solo_lectura = True
     else:
         panel_flujo(fl)
@@ -162,6 +164,13 @@ def vista_departamentos(repo, fl, usuario):
         roster = repo.roster(origen)
         estructura = repo.estructura_tc(origen)
         prelim = repo.horas_dictado_prelim(origen)
+        if usuario.solo_ver(origen, "TC"):
+            ccos, estructura, entrada, roster, prelim = _solo_postgrado(
+                ccos, estructura, entrada, roster, prelim)
+            if entrada[entrada["HOJA_ORIGEN"].isin(TC_HOJAS)].empty:
+                st.info(f"{origen} aún no tiene horas del plan TC en centros de postgrado.",
+                        icon="🎓")
+                return
         pestañas = st.tabs(["I semestre (Ene-Jun)", "II semestre (Jul-Dic)"],
                            on_change="rerun", key=f"tabs_tc_{origen}")
         for hoja, tab in zip(TC_HOJAS, pestañas):
@@ -187,6 +196,19 @@ def vista_departamentos(repo, fl, usuario):
 
 AYUDANTIAS = "Ayudantias"
 INVESTIGACION = "Investigacion"
+
+
+def _solo_postgrado(ccos, estructura, entrada, roster, prelim):
+    """Plan TC para el rol Postgrado: solo los centros de postgrado y los
+    docentes con horas guardadas en ellos (siempre en solo lectura)."""
+    ccos = ccos[ccos["CODIGO_CECO"].map(es_ceco_postgrado)]
+    estructura = estructura[estructura["CODIGO_CECO"].map(es_ceco_postgrado)]
+    # Solo filas con horas: las de 0 harían aparecer docentes sin postgrado
+    entrada = entrada[entrada["CENTRO_COSTO"].map(es_ceco_postgrado)
+                      & (pd.to_numeric(entrada["HORAS"], errors="coerce").fillna(0) > 0)]
+    con_horas = set(entrada["DNI"].astype(str).str.strip())
+    roster = roster[roster["DNI"].astype(str).str.strip().isin(con_horas)]
+    return ccos, estructura, entrada, roster, prelim.iloc[0:0]
 
 
 def _aviso_investigacion(repo, usuario, origen) -> bool:

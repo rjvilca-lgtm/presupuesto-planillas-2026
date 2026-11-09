@@ -1,10 +1,13 @@
 /*
   Rol POSTGRADO en USUARIOS_PLANILLAS.
 
-  Ve la planilla de Postgrado de TODOS los departamentos, en solo lectura
-  (no guarda ni valoriza; eso lo sigue haciendo cada departamento). No ve
-  las demás planillas, ni el resumen de valorización, ni la consulta de
-  carga académica.
+  Ve, de TODOS los departamentos y en solo lectura (no guarda ni valoriza;
+  eso lo sigue haciendo cada departamento):
+    - la planilla de Postgrado;
+    - el Plan de trabajo TC, solo con los centros de postgrado
+      (01.01.xx.04.xx) y los docentes que tienen horas en ellos.
+  No ve las demás planillas, ni el resumen de valorización, ni la consulta
+  de carga académica.
 
   Como PRESUPUESTO o DGA, va sin departamento (DEPARTAMENTO = NULL): una
   sola fila por correo. Se da desde Administración › Usuarios, rol

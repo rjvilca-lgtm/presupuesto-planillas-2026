@@ -15,7 +15,8 @@ registra la planilla de Investigación de sus departamentos (el departamento
 también puede modificarla y la valoriza) y PUESTOS (sql/crear_puestos_nuevos_2027.sql)
 registra los puestos nuevos de su departamento o área. POSTGRADO
 (sql/crear_rol_postgrado.sql) ve, en solo lectura, la planilla de Postgrado
-de todos los departamentos.
+y el Plan de trabajo TC (solo los centros de postgrado) de todos los
+departamentos.
 
 Probar como: un usuario PRESUPUESTO puede ver la app con los permisos de otro
 correo (Administración › Usuarios) para revisar qué ve y qué puede hacer.
@@ -45,7 +46,7 @@ class Usuario:
     areas: list = field(default_factory=list)   # áreas no académicas (ayudantías)
     investigacion: list = field(default_factory=list)   # gestor: planilla Investigación
     puestos: list = field(default_factory=list)   # departamentos o áreas: puestos nuevos
-    postgrado: bool = False   # ve (solo lectura) la planilla de Postgrado de todos
+    postgrado: bool = False   # ve (solo lectura) Postgrado y el plan TC de postgrado
     probando_como: str | None = None   # correo cuyos permisos se están probando
     sin_rrhh: bool = False             # se le quitó Desarrollo Humano al probar
 
@@ -67,11 +68,12 @@ class Usuario:
         if self.presupuesto or depto in self.departamentos:
             return None
         return ((["Investigacion"] if depto in self.investigacion else [])
-                + (["Postgrado"] if self.postgrado else []))
+                + (["TC", "Postgrado"] if self.postgrado else []))
 
     def solo_ver(self, depto: str, hoja: str) -> bool:
-        """La abre solo por el rol Postgrado: puede verla, no modificarla."""
-        return (hoja == "Postgrado" and self.postgrado and not self.presupuesto
+        """La abre solo por el rol Postgrado: puede verla, no modificarla (en
+        el plan TC, solo los centros de postgrado)."""
+        return (hoja in ("TC", "Postgrado") and self.postgrado and not self.presupuesto
                 and depto not in self.departamentos)
 
 

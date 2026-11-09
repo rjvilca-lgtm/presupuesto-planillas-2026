@@ -264,6 +264,15 @@ PLANILLAS = {
 PUESTOS_NUEVOS = "Puestos nuevos"
 
 
+def es_ceco_postgrado(codigo) -> bool:
+    """Centro de postgrado de una facultad: 01.01.xx.04.xx (Escuela de
+    Postgrado, Gestión Administrativa Postgrado de cada facultad, maestrías y
+    segundas especialidades). La sección .04 bajo 03.* es investigación y
+    bajo 01.03.* pastoral: no cuentan."""
+    partes = str(codigo).strip().split(".")
+    return len(partes) == 5 and partes[:2] == ["01", "01"] and partes[3] == "04"
+
+
 def planillas_departamento() -> dict:
     """Las planillas del selector y del Resumen de cada departamento (sin las
     que tienen pestaña propia, como Puestos nuevos)."""
