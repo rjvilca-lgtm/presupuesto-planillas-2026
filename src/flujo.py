@@ -330,7 +330,7 @@ def _dialogo_cerrar(repo, origen):
 # ---------------------------------------------------------- administración
 
 ROLES = {"DEPARTAMENTO": "Departamento", "INVESTIGACION": "Investigación (gestor)",
-         "AREA": "Área (ayudantías)", "PUESTOS": "Puestos nuevos",
+         "AREA": "Ayudantías (área o departamento)", "PUESTOS": "Puestos nuevos",
          "POSTGRADO": "Postgrado (ver todos)", "DGA": "DGA",
          "DESARROLLO_HUMANO": "Desarrollo Humano", "PRESUPUESTO": "Presupuesto"}
 # Roles que van con un código de departamento o de área
@@ -573,8 +573,10 @@ def _admin_usuarios(repo, deptos: list[tuple], areas: list[tuple]):
                "Desarrollo Humano mantiene docentes, horas, tarifas y salarios; "
                "Departamento registra las planillas de ese departamento y las valoriza; "
                "Investigación (gestor) registra solo la planilla de Investigación de ese "
-               "departamento, que el departamento revisa y valoriza; Área registra las "
-               "ayudantías de esa área no académica.")
+               "departamento, que el departamento revisa y valoriza; Ayudantías registra "
+               "las ayudantías de un área no académica (y sus prácticas), o solo la "
+               "planilla de Ayudantías de un departamento académico, que el departamento "
+               "revisa y valoriza.")
     try:
         usuarios = repo.listar_usuarios()
     except Exception as ex:
@@ -616,9 +618,6 @@ def _admin_usuarios(repo, deptos: list[tuple], areas: list[tuple]):
             return
         if rol in ("DEPARTAMENTO", "INVESTIGACION") and depto not in dict(deptos):
             st.error(f"El rol {ROLES[rol]} va con un departamento, no con un área.")
-            return
-        if rol == "AREA" and depto not in dict(areas):
-            st.error("El rol Área va con un área no académica, no con un departamento.")
             return
         repo.guardar_usuario(email, rol, depto if rol in ROLES_CON_CODIGO else None,
                              activo=bool(dar))
@@ -687,10 +686,10 @@ def _admin_usuarios_lote(repo, usuarios, deptos: list[tuple], areas: list[tuple]
                        key="lote_rol")
     codigos = []
     if rol in ROLES_CON_CODIGO:
-        lista = (areas if rol == "AREA" else
-                 list(deptos) + list(areas) if rol == "PUESTOS" else deptos)
+        lista = (list(deptos) + list(areas) if rol in ("AREA", "PUESTOS") else deptos)
         codigos = c2.multiselect(
-            {"AREA": "Área", "PUESTOS": "Departamento(s) o área(s)"}.get(rol, "Departamento(s)"),
+            {"AREA": "Área(s) o departamento(s)",
+             "PUESTOS": "Departamento(s) o área(s)"}.get(rol, "Departamento(s)"),
             [c for c, _ in lista],
             format_func=lambda c: f"{c} · {dict(lista)[c]}", key=f"lote_codigos_{rol}",
             help="Si eliges varios, cada correo recibe el rol en cada uno.")
@@ -704,7 +703,7 @@ def _admin_usuarios_lote(repo, usuarios, deptos: list[tuple], areas: list[tuple]
     if not correos:
         return
     if rol in ROLES_CON_CODIGO and not codigos:
-        que = "el área" if rol == "AREA" else "el departamento"
+        que = "el área o departamento" if rol == "AREA" else "el departamento"
         st.info(f"Elige {que} para el rol {ROLES[rol]}.", icon="👆")
         return
     accesos = [(c, rol, d) for c in correos for d in (codigos or [None])]

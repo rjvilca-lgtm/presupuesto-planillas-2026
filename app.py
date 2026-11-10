@@ -116,7 +116,7 @@ def _main(contexto):
     # Cada rol ve solo sus pestañas; la consulta de carga académica, todos
     pestañas = []
     if (usuario.presupuesto or usuario.departamentos or usuario.investigacion
-            or usuario.postgrado):
+            or usuario.ayudantias or usuario.postgrado):
         pestañas.append(("Presupuesto por departamento",
                          lambda: vista_departamentos(repo, fl, usuario)))
     if usuario.presupuesto or usuario.areas:
@@ -167,7 +167,7 @@ def vista_departamentos(repo, fl, usuario):
     # gestor de investigación, solo la planilla de Investigación; el rol
     # Postgrado, la de Postgrado de todos, en solo lectura)
     permitidos = None if usuario.presupuesto or usuario.postgrado else list(
-        dict.fromkeys(usuario.departamentos + usuario.investigacion))
+        dict.fromkeys(usuario.departamentos + usuario.investigacion + usuario.ayudantias))
     origen, seleccion = selector_contexto(repo, permitidos, usuario.planillas_de)
     st.session_state["_pantalla_detalle"] = f"{origen} · {seleccion}"
     if usuario.solo_ver(origen, seleccion):
@@ -572,7 +572,10 @@ def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guard
                        solo_lectura, usuario, sps=()):
     """Grilla matricial + feedback en vivo + guardado de borrador (con sps,
     además valoriza al guardar: las áreas de ayudantías)."""
-    gestor = usuario.planillas_de(origen) == [INVESTIGACION]
+    # Gestor de investigación o de ayudantías del departamento: guarda, pero
+    # valoriza el departamento
+    gestor = usuario.planillas_de(origen) in ([INVESTIGACION], [AYUDANTIAS],
+                                              [INVESTIGACION, AYUDANTIAS])
     _mostrar_resultado(hoja)
     # Claves de sesión de la grilla (ver vistas.grilla)
     borrador.mostrar_conflicto(hoja, origen, [f"_base_{hoja}_{origen}",
@@ -659,7 +662,7 @@ def guardar_borrador(repo, hoja, origen, editado, email, sps=(), gestor=False, f
         if cfg.get("pestaña_propia"):   # no se valoriza: no marca el flujo del depto
             return True, f"{cfg['etiqueta']}: {n} registro(s) guardado(s)."
         marcar(repo, origen, FECHA_GUARDADO=ahora())
-        if gestor:   # el gestor de investigación no valoriza: lo hace el departamento
+        if gestor:   # el gestor (investigación o ayudantías) no valoriza: lo hace el departamento
             return True, (f"{cfg['etiqueta']}: {n} registro(s) guardado(s). El departamento "
                           "ya puede revisarlos y valorizarlos.")
         return True, (f"{cfg['etiqueta']}: {n} registro(s) guardado(s). Cuando termines "

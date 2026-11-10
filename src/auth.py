@@ -44,6 +44,8 @@ class Usuario:
     rrhh: bool = False   # Desarrollo Humano
     departamentos: list = field(default_factory=list)
     areas: list = field(default_factory=list)   # áreas no académicas (ayudantías)
+    # rol AREA con un departamento académico: solo la planilla de Ayudantías
+    ayudantias: list = field(default_factory=list)
     investigacion: list = field(default_factory=list)   # gestor: planilla Investigación
     puestos: list = field(default_factory=list)   # departamentos o áreas: puestos nuevos
     postgrado: bool = False   # ve (solo lectura) Postgrado y el plan TC de postgrado
@@ -54,13 +56,14 @@ class Usuario:
     def tiene_acceso(self) -> bool:
         return (self.presupuesto or self.dga or self.rrhh or bool(self.departamentos)
                 or bool(self.areas) or bool(self.investigacion) or bool(self.puestos)
-                or self.postgrado)
+                or bool(self.ayudantias) or self.postgrado)
 
     @property
     def solo_investigacion(self) -> bool:
-        """Gestor de investigación, de puestos o rol Postgrado sin otro rol:
-        solo ve lo suyo."""
-        return bool(self.investigacion or self.puestos or self.postgrado) and not (
+        """Gestor de investigación, de puestos, de ayudantías de un
+        departamento o rol Postgrado sin otro rol: solo ve lo suyo."""
+        return bool(self.investigacion or self.puestos or self.postgrado
+                    or self.ayudantias) and not (
             self.presupuesto or self.dga or self.rrhh or self.departamentos or self.areas)
 
     def planillas_de(self, depto: str) -> list | None:
@@ -68,6 +71,7 @@ class Usuario:
         if self.presupuesto or depto in self.departamentos:
             return None
         return ((["Investigacion"] if depto in self.investigacion else [])
+                + (["Ayudantias"] if depto in self.ayudantias else [])
                 + (["TC", "Postgrado"] if self.postgrado else []))
 
     def solo_ver(self, depto: str, hoja: str) -> bool:
@@ -170,7 +174,8 @@ def exigir_login(repo) -> Usuario:
         st.error("No se pudieron leer los permisos. Si es la primera vez, ejecuta "
                  "`sql/crear_usuarios_planillas.sql` en Azure.")
         st.stop()
-    usuario = _con_permisos(Usuario(email=email, nombre=nombre), filas)
+    usuario = _separar_ayudantias(_con_permisos(Usuario(email=email, nombre=nombre), filas),
+                                  repo)
     como = st.session_state.get(PROBAR_COMO)
     if como and usuario.presupuesto and como != email:
         usuario = _probar_como(repo, usuario, como)
@@ -208,12 +213,24 @@ def _con_permisos(usuario: Usuario, filas) -> Usuario:
     return usuario
 
 
+def _separar_ayudantias(usuario: Usuario, repo) -> Usuario:
+    """El rol AREA (ayudantías) puede ir con un área no académica o con un
+    departamento académico. Con un departamento, la persona registra solo la
+    planilla de Ayudantías de ese departamento (como el gestor de
+    investigación): pasa de areas a ayudantias."""
+    if usuario.areas:
+        deptos = {d for d, _ in repo.departamentos()}
+        usuario.ayudantias = [a for a in usuario.areas if a in deptos]
+        usuario.areas = [a for a in usuario.areas if a not in deptos]
+    return usuario
+
+
 def _probar_como(repo, real: Usuario, como: str) -> Usuario:
     """Los permisos de otro correo, para que Presupuesto vea la app como esa
     persona. El correo sigue siendo el real (lo guardado queda a su nombre) y
     nunca incluye Desarrollo Humano: los salarios no se ven por esta vía."""
-    otro = _con_permisos(Usuario(email=real.email, nombre=real.nombre),
-                         repo.permisos_usuario(como))
+    otro = _separar_ayudantias(_con_permisos(Usuario(email=real.email, nombre=real.nombre),
+                                             repo.permisos_usuario(como)), repo)
     otro.probando_como = como
     otro.sin_rrhh, otro.rrhh = otro.rrhh, False
     if not otro.tiene_acceso:
