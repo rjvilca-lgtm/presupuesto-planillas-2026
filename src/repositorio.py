@@ -782,11 +782,17 @@ class RepositorioSQL:
         return list(df.itertuples(index=False, name=None))
 
     def centros_costo_area(self, area: str) -> pd.DataFrame:
-        """Centros de costo 2027 de la dirección del área."""
+        """Centros de costo 2027 de la dirección del área. Si el área tiene
+        PREFIJO_CECO (sql/areas_dga_comunidad_2027.sql), solo los de su
+        dirección que empiezan con él: Comunidad Universitaria no es una
+        dirección del catálogo, son los 01.03.01.04.* de Persona y Cultura."""
+        prefijo = self._leer("SELECT COL_LENGTH('dbo.AREAS_2027', 'PREFIJO_CECO') AS L")
+        filtro = ("AND (a.PREFIJO_CECO IS NULL OR c.CENTRO_COSTO LIKE a.PREFIJO_CECO + '%%') "
+                  if prefijo["L"].iloc[0] is not None else "")
         return self._leer(
             "SELECT c.CENTRO_COSTO AS CODIGO_CECO, c.DESCRIPCION_CC AS DESCRIPCION_CECO "
             "FROM AREAS_2027 a JOIN CENTROS_COSTOS_2027 c ON c.DIRECCION = a.DIRECCION "
-            "WHERE a.CODIGO = %s ORDER BY c.CENTRO_COSTO", (area,))
+            f"WHERE a.CODIGO = %s {filtro}ORDER BY c.CENTRO_COSTO", (area,))
 
     def todos_centros_costo(self) -> pd.DataFrame:
         tabla = "CENTROS_COSTOS_2027" if self._cecos_2027() else "CENTROS_COSTOS"

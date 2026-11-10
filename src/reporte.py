@@ -32,10 +32,11 @@ SOLES = st.column_config.NumberColumn(format="localized")
 
 
 def _alcance(usuario, deptos, areas) -> list[str]:
+    # dict.fromkeys: el área DGA (ayudantías) tiene el mismo código que la carga académica
     if usuario.presupuesto:
-        return [d for d, _ in deptos] + [DGA, DDH] + [a for a, _ in areas]
-    return (list(usuario.departamentos) + ([DGA] if usuario.dga else [])
-            + ([DDH] if usuario.rrhh else []) + list(usuario.areas))
+        return list(dict.fromkeys([d for d, _ in deptos] + [DGA, DDH] + [a for a, _ in areas]))
+    return list(dict.fromkeys(list(usuario.departamentos) + ([DGA] if usuario.dga else [])
+                              + ([DDH] if usuario.rrhh else []) + list(usuario.areas)))
 
 
 def _preparar(df: pd.DataFrame) -> pd.DataFrame:
@@ -60,7 +61,7 @@ def vista_reporte(repo, fl, usuario, deptos):
                "el centro de costo 0 (Gestión de Dirección), que valoriza Desarrollo Humano.")
     areas = repo.areas()
     alcance = _alcance(usuario, deptos, areas)
-    nombres = {**dict(deptos), **dict(areas), DGA: "Carga académica (DGA)",
+    nombres = {**dict(deptos), **dict(areas), DGA: "Dirección de Gestión Académica",
                DDH: "Desarrollo Humano"}
     d27 = _preparar(repo.valorizacion(2027, alcance))
     d26 = _preparar(repo.valorizacion(2026, alcance))

@@ -387,9 +387,10 @@ def _admin_bloqueos(repo, fl: Flujo, deptos: list[tuple], areas: list[tuple]):
         st.rerun()
 
     st.subheader("Departamentos y áreas")
-    codigos = [d for d, _ in deptos] + [DGA] + [a for a, _ in areas]
-    nombres = {**dict(deptos), DGA: "Dirección de Gestión Académica (carga académica)",
-               **{a: f"{n} (ayudantías)" for a, n in areas}}
+    codigos = list(dict.fromkeys([d for d, _ in deptos] + [DGA] + [a for a, _ in areas]))
+    nombres = {**dict(deptos), **{a: f"{n} (ayudantías)" for a, n in areas},
+               DGA: "Dirección de Gestión Académica (carga académica"
+                    + (" y ayudantías)" if DGA in dict(areas) else ")")}
     filas = []
     for d in codigos:
         e = fl.estado(d)
@@ -449,9 +450,10 @@ def _admin_limpieza(repo, fl: Flujo, deptos: list[tuple], usuario, areas: list[t
         return
 
     conteos = repo.conteos_2027().set_index("DEPTO")
-    nombres = {**dict(deptos), DGA: "Carga académica (DGA)",
-               "DDH": "Valorización de Desarrollo Humano",
-               **{a: f"{n} (ayudantías)" for a, n in areas}}
+    nombres = {**dict(deptos), **{a: f"{n} (ayudantías)" for a, n in areas},
+               DGA: "Dirección de Gestión Académica (carga académica"
+                    + (" y ayudantías)" if DGA in dict(areas) else ")"),
+               "DDH": "Valorización de Desarrollo Humano"}
     opciones = list(dict.fromkeys([d for d, _ in deptos] + [DGA, "DDH"]
                                   + [a for a, _ in areas] + [d for d in conteos.index if d]))
     todos = st.toggle("Todos los departamentos", value=True, key="limpiar_todos")

@@ -73,7 +73,7 @@ from src.diagnostico import iniciar_medicion, iniciar_vigilante, registrar, vist
 from src.carga_academica import consulta_carga_academica, registro_carga_academica
 from src.config import (MESES, PRACTICAS, PUESTOS_NUEVOS, cfg_de, dims_fila,
                         es_ceco_postgrado, tarifa_fija)
-from src.flujo import (aviso_departamento, leer_flujo, marcar, ahora, panel_flujo,
+from src.flujo import (DGA, aviso_departamento, leer_flujo, marcar, ahora, panel_flujo,
                        vista_admin, vista_resumen)
 from src.reporte import vista_reporte
 from src import plantilla_tc
@@ -640,8 +640,11 @@ def guardar_borrador(repo, hoja, origen, editado, email, sps=(), gestor=False, f
                                      version=versiones.get(clave), sps=sps,
                                      al_confirmar=al_confirmar)
         if sps:
-            momento = ahora()
-            marcar(repo, origen, FECHA_GUARDADO=momento, FECHA_VALORIZACION=momento)
+            # El área DGA comparte código con la carga académica: sus ayudantías
+            # no deben marcarla como guardada ni valorizada en el flujo
+            if origen != DGA:
+                momento = ahora()
+                marcar(repo, origen, FECHA_GUARDADO=momento, FECHA_VALORIZACION=momento)
             return True, f"{cfg['etiqueta']}: {n} registro(s) guardado(s) y valorizado(s)."
         if hoja == PRACTICAS:
             return True, (f"{cfg['etiqueta']}: {total_horas(hoja, editado):,.1f} hora(s) "
