@@ -20,6 +20,12 @@ def _meses_presentes(df: pd.DataFrame) -> list[str]:
     return [m for m in MESES if m in df.columns]
 
 
+def _columnas_fila_val(cfg: dict) -> list[str]:
+    """Columnas que escribe el usuario a la izquierda de los meses."""
+    cols = list(cfg.get("columnas_info", [])) + [d for d in dims_fila(cfg)]
+    return cols + (["TARIFA"] if cfg.get("tarifa_editable") else [])
+
+
 def _matriz_valores(df: pd.DataFrame) -> pd.DataFrame:
     """Las 12 columnas de mes como números, con vacíos = 0."""
     meses = _meses_presentes(df)
@@ -78,6 +84,22 @@ def validar(hoja: str, df: pd.DataFrame, ccos_validos: set, tarifas: dict,
     cfg = cfg_de(hoja)
     dims = dims_fila(cfg)
     errores = []
+
+    # Filas que escribe el usuario (sin padrón ni precarga): una fila con centro,
+    # tipo o detalle pero sin ningún mes no se guarda (solo van las celdas > 0)
+    # y desaparecía sin aviso al volver a entrar (pasó en Puestos nuevos)
+    if not df.empty and not cfg["usa_roster"] and not cfg.get("precarga"):
+        llenas = pd.Series(False, index=df.index)
+        for c in [c for c in _columnas_fila_val(cfg) if c in df]:
+            llenas |= df[c].notna() & (df[c].astype(str).str.strip() != "")
+        sin_meses = llenas & ~_filas_con_datos(df)
+        if sin_meses.any():
+            filas = ", ".join(str(i + 1) for i in df.index[sin_meses][:15])
+            errores.append(
+                f"La(s) fila(s) {filas} no tienen ningún mes con valor y no se guardarían. "
+                f"Escribe en los meses {cfg.get('unidad', 'el valor')} (por ejemplo 1) o "
+                "borra la fila. Revisa también el otro semestre.")
+            return errores
 
     if df.empty or not _filas_con_datos(df).any():
         # Un borrador vacío es válido: deja la planilla sin datos
