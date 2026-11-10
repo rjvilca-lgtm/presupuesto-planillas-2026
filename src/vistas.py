@@ -179,12 +179,17 @@ def selector_contexto(repo, permitidos=None, planillas_de=None):
 
 
 def hero(hoja: str, total_soles: float, horas: float, lineas: int, registros: int,
-         ocultar_monto: bool = False):
+         ocultar_monto: bool = False, puestos: int | None = None):
     """ocultar_monto: los costos de Puestos nuevos son reservados; quien los
-    registra ve cuántos puestos-mes lleva, no el importe."""
+    registra ve cuántos puestos lleva, no el importe. puestos: si viene, el
+    detalle dice «N puesto(s) · M puestos-mes» en vez de líneas y registros."""
     cfg = cfg_de(hoja)
+    sub = (f"{puestos} puesto(s) · {registros} {cfg.get('unidad', 'unidades')}-mes"
+           if puestos is not None else
+           f"{lineas} línea(s) · {registros} registro(s) mensual(es)")
     if ocultar_monto:
-        monto = f"{horas:,.0f} {cfg.get('unidad', 'unidades')}-mes"
+        monto = f"{puestos if puestos is not None else horas:,.0f} puesto(s)"
+        sub = f"{registros} {cfg.get('unidad', 'unidades')}-mes"
         nota = ("El costo lo calcula la Oficina de Presupuesto con la escala de "
                 "Desarrollo Humano.")
     elif cfg["tarifa"] == "server":
@@ -196,7 +201,7 @@ def hero(hoja: str, total_soles: float, horas: float, lineas: int, registros: in
     st.markdown(
         f"""<div class="hero">
               <div class="monto">{monto}</div>
-              <div class="sub">{lineas} línea(s) · {registros} registro(s) mensual(es)</div>
+              <div class="sub">{sub}</div>
               <div class="nota">{nota}</div>
             </div>""",
         unsafe_allow_html=True,

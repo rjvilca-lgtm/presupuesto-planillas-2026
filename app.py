@@ -78,7 +78,7 @@ from src.reporte import vista_reporte
 from src import plantilla_tc
 from src.rrhh import vista_desarrollo_humano
 from src.repositorio import ConflictoGuardado, crear_repositorio, preparar_filas
-from src.validacion import conteo, estimar_importe, total_horas, validar
+from src.validacion import conteo, contar_puestos, estimar_importe, total_horas, validar
 from src.vistas import (TC_HOJAS, ficha_docente, grilla, hero,
                         inyectar_estilos, selector_contexto)
 
@@ -539,10 +539,10 @@ def _renderizar_grilla(repo, fl, hoja, cfg, ccos, roster, tarifas, origen, guard
     horas = total_horas(hoja, editado)
     lineas, registros = conteo(editado)
     reservado = cfg.get("montos_reservados") and not (usuario.presupuesto or usuario.rrhh)
-    if reservado:   # puestos-mes: la suma de las celdas
-        from src.validacion import _matriz_valores
-        horas = float(_matriz_valores(editado).sum().sum()) if not editado.empty else 0.0
-    hero(hoja, total, horas, lineas, registros, ocultar_monto=reservado)
+    if hoja == PUESTOS_NUEVOS:   # puestos-mes: la suma de las celdas
+        registros = int(round(total_horas(hoja, editado)))
+    hero(hoja, total, horas, lineas, registros, ocultar_monto=reservado,
+         puestos=contar_puestos(editado) if hoja == PUESTOS_NUEVOS else None)
 
     clave = f"{hoja}|{origen}"
     f_actual = firma(editado, [c for c in editado.columns if c not in MESES], MESES)
@@ -601,6 +601,10 @@ def guardar_borrador(repo, hoja, origen, editado, email, sps=(), gestor=False, f
             momento = ahora()
             marcar(repo, origen, FECHA_GUARDADO=momento, FECHA_VALORIZACION=momento)
             return True, f"{cfg['etiqueta']}: {n} registro(s) guardado(s) y valorizado(s)."
+        if hoja == PUESTOS_NUEVOS:
+            return True, (f"{cfg['etiqueta']}: {contar_puestos(editado)} puesto(s) "
+                          f"guardado(s) ({int(round(total_horas(hoja, editado)))} "
+                          f"{cfg.get('unidad', 'puestos')}-mes).")
         if cfg.get("pestaña_propia"):   # no se valoriza: no marca el flujo del depto
             return True, f"{cfg['etiqueta']}: {n} registro(s) guardado(s)."
         marcar(repo, origen, FECHA_GUARDADO=ahora())

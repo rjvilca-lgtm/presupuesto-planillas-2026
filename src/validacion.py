@@ -77,6 +77,14 @@ def conteo(df: pd.DataFrame) -> tuple[int, int]:
     return lineas, registros
 
 
+def contar_puestos(df: pd.DataFrame) -> int:
+    """Puestos nuevos: cuántos puestos son (en cada fila, el mayor número de
+    puestos en un mes; normalmente 1), no cuántos meses-puesto."""
+    if df.empty or not _meses_presentes(df):
+        return 0
+    return int(round(_matriz_valores(df).max(axis=1).sum()))
+
+
 def validar(hoja: str, df: pd.DataFrame, ccos_validos: set, tarifas: dict,
             estricto: bool = True) -> list[str]:
     """estricto=False para guardar borradores: solo el formato. Las reglas de
