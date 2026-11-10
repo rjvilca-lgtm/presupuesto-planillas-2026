@@ -132,9 +132,12 @@ def _main(contexto):
     if usuario.rrhh:
         pestañas.append(("Desarrollo Humano",
                          lambda: vista_desarrollo_humano(repo, usuario, repo.departamentos())))
-    if not usuario.solo_investigacion:   # el gestor de investigación solo registra
+    # Consulta de la carga académica: Presupuesto y la DGA, todo; los
+    # departamentos académicos, solo sus centros de costo
+    if usuario.presupuesto or usuario.dga or usuario.departamentos:
         pestañas.append(("Carga académica · consulta",
-                         lambda: consulta_carga_academica(repo, fl)))
+                         lambda: consulta_carga_academica(repo, fl, usuario)))
+    if not usuario.solo_investigacion:   # el gestor de investigación solo registra
         pestañas.append(("Resumen de valorización",
                          lambda: vista_reporte(repo, fl, usuario, repo.departamentos())))
     if usuario.presupuesto:

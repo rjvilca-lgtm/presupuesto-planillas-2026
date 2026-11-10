@@ -344,14 +344,26 @@ def _dialogo_valorizar(repo):
         st.rerun()
 
 
-def consulta_carga_academica(repo, fl):
+def consulta_carga_academica(repo, fl, usuario):
+    """Presupuesto y la DGA ven toda la carga; un departamento, solo la de sus
+    centros de costo (los de repo.centros_costo de cada departamento suyo)."""
+    todo = usuario.presupuesto or usuario.dga
     st.caption("Carga académica 2027 registrada por la Dirección de Gestión "
-               "Académica. Solo lectura.")
+               "Académica. Solo lectura."
+               + ("" if todo else " Solo se muestran los centros de costo de tu "
+                  "departamento."))
     panel_flujo(fl)
     datos = _a_ancho(repo.carga_academica(actual=True))
+    propios = None
+    if not todo:
+        propios = set()
+        for d in usuario.departamentos:
+            propios |= set(repo.centros_costo(d)["CODIGO_CECO"])
+        datos = datos[datos["CENTRO_COSTO"].isin(propios)].reset_index(drop=True)
     if datos.empty:
-        st.info("La Dirección de Gestión Académica aún no ha registrado la carga "
-                "académica 2027.", icon="ℹ️")
+        st.info("La Dirección de Gestión Académica aún no ha registrado carga "
+                "académica 2027" + (" en los centros de costo de tu departamento."
+                                    if propios is not None else "."), icon="ℹ️")
         return
     desc = dict(zip(*repo.todos_centros_costo()[["CODIGO_CECO", "DESCRIPCION_CECO"]]
                     .T.values))
@@ -360,6 +372,8 @@ def consulta_carga_academica(repo, fl):
     # Horas de los docentes a tiempo completo (DTC) que el sp resta de las de
     # titulares: horas académicas de dictado de los planes TC, por CECO y semestre
     dtc = repo.horas_dtc()
+    if propios is not None:
+        dtc = dtc[dtc["CENTRO_COSTO"].isin(propios)]
     por_ceco = dtc.groupby(["MES", "CENTRO_COSTO"])["HORAS"].sum()
     titulares = pd.to_numeric(datos[TITULARES], errors="coerce").fillna(0.0)
     descuento = pd.Series([por_ceco.get((m, c), 0.0)
