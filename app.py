@@ -123,7 +123,8 @@ def _main(contexto):
         pestañas.append(("Ayudantías · áreas", lambda: vista_areas(repo, fl, usuario)))
     if usuario.presupuesto or usuario.puestos:
         pestañas.append(("Puestos nuevos", lambda: vista_puestos(repo, fl, usuario)))
-    if usuario.presupuesto or usuario.departamentos or usuario.areas:
+    if (usuario.presupuesto or usuario.departamentos or usuario.areas
+            or usuario.ayudantias):
         pestañas.append(("Prácticas pre-profesionales",
                          lambda: vista_practicas(repo, fl, usuario)))
     if usuario.presupuesto or usuario.dga:
@@ -341,14 +342,14 @@ def vista_puestos(repo, fl, usuario):
 def vista_practicas(repo, fl, usuario):
     """Prácticas pre-profesionales: horas de practicante por mes (marzo a
     julio y agosto a diciembre) de cada departamento y área no académica. Las
-    registran los usuarios de departamento y los de ayudantías (rol AREA);
+    registran los usuarios de departamento y los de ayudantías (rol AREA, de área o de departamento);
     Presupuesto, todos. Cada hora vale la tarifa única de tarifas_2027 que
     Desarrollo Humano cambia en su pestaña › Tarifas."""
     cfg = cfg_de(PRACTICAS)
     deptos, areas = dict(repo.departamentos()), dict(repo.areas())
     unidades = {**deptos, **areas}
     if not usuario.presupuesto:
-        propias = set(usuario.departamentos) | set(usuario.areas)
+        propias = set(usuario.departamentos) | set(usuario.areas) | set(usuario.ayudantias)
         unidades = {c: n for c, n in unidades.items() if c in propias}
     if not unidades:
         st.info("No tienes departamentos ni áreas asignados.", icon="🔒")
