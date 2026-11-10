@@ -360,8 +360,7 @@ def vista_practicas(repo, fl, usuario):
                    "Presupuesto debe ejecutar `sql/crear_practicas_2027.sql` en Azure.",
                    icon="⚠️")
         return
-    st.caption(f"{cfg['ayuda']} Cada hora se valoriza a **S/ {tarifa:,.2f}** (lo fija "
-               "Desarrollo Humano).")
+    st.caption(cfg["ayuda"])
     solo_lectura = aviso_departamento(fl, origen)
     ccos = repo.centros_costo(origen) if origen in deptos else repo.centros_costo_area(origen)
     if ccos.empty:
