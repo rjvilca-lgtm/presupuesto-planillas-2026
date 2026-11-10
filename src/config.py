@@ -13,6 +13,8 @@ Campos:
                de IMPORTE (las multiplica por 4.5).
   dimensiones  Columnas que identifican cada registro.
   tarifa       "server"   → la aplica el procedimiento; el usuario no la ve.
+               "fija"     → una sola tarifa para toda la planilla (la única fila
+                            de tarifas_2027 de esa hoja); no hay columna de tipo.
                "catalogo" → se resuelve por TIPO desde el catálogo (server-side);
                             el usuario elige el TIPO, nunca teclea el precio.
                None       → la planilla entrega IMPORTE ya calculado.
@@ -35,6 +37,8 @@ Campos:
   mes_carga    Solo para hojas con usa_roster=True: mes en el que se carga el
                valor único (horas por mes) de la ficha. sp_ValorizarPlanilla_
                Total_2026 lo replica: MARZO (3) → meses 1-7, AGOSTO (8) → 8-12.
+  semestres    {etiqueta: [meses]} del selector de la grilla, si no son
+               Ene-Jun / Jul-Dic. Solo esos meses admiten valores.
   sps          Procedimientos de valorización a ejecutar tras la carga, en orden.
                (nombre, pasa_OrigenEntrada)
 
@@ -279,10 +283,51 @@ PLANILLAS = {
                  "(o cuántos puestos iguales hacen falta). El costo lo calcula la Oficina "
                  "de Presupuesto con la escala de Desarrollo Humano.",
     },
+    # Pestaña propia: la registran los departamentos y las áreas (rol AREA, el de
+    # ayudantías). Se piden horas de practicante por mes, solo de marzo a julio y
+    # de agosto a diciembre. Cada hora vale la tarifa única de tarifas_2027
+    # (HOJA_ORIGEN 'Practicas', sql/crear_practicas_2027.sql), que Desarrollo
+    # Humano cambia en su pestaña › Tarifas. No hay sp: IMPORTE = horas × tarifa.
+    "Practicas": {
+        "etiqueta": "Prácticas pre-profesionales",
+        "pestaña_propia": True,
+        "metrica": "HORAS",
+        "unidad": "horas",
+        "guardar_importe": True,
+        "dimensiones": ["CENTRO_COSTO", "CONCEPTO_2", "MES"],
+        "etiquetas": {"CONCEPTO_2": "Actividad o justificación"},
+        "tarifa": "fija",              # una sola tarifa por hora (tarifa_fija)
+        "semestres": {"I semestre (Mar-Jul)": MESES[2:7],
+                      "II semestre (Ago-Dic)": MESES[7:]},
+        "usa_roster": False,
+        "sps": [],
+        "ayuda": "Una fila por pedido de practicantes: el centro de costo, la actividad "
+                 "o por qué se necesita y, en cada mes, las horas de práctica (la suma "
+                 "de todos los practicantes de esa fila). Solo de marzo a julio y de "
+                 "agosto a diciembre.",
+    },
 }
 
 
 PUESTOS_NUEVOS = "Puestos nuevos"
+PRACTICAS = "Practicas"
+
+
+def semestres_de(cfg: dict) -> dict:
+    """Semestres del selector de la grilla: los de la planilla o Ene-Jun/Jul-Dic."""
+    return cfg.get("semestres", SEMESTRES)
+
+
+def meses_de(cfg: dict) -> list[str]:
+    """Meses en que la planilla admite valores (en orden)."""
+    return [m for meses in semestres_de(cfg).values() for m in meses]
+
+
+def tarifa_fija(tarifas: dict) -> float | None:
+    """La tarifa de una planilla con tarifa «fija» (un solo valor en
+    tarifas_2027 para su HOJA_ORIGEN); None si no está cargada."""
+    valores = [float(v) for v in tarifas.values() if v]
+    return valores[0] if valores else None
 
 
 def es_ceco_postgrado(codigo) -> bool:

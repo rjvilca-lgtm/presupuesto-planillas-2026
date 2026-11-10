@@ -273,8 +273,9 @@ def _tarifas(repo, usuario):
 
     st.markdown("**Tarifas por hora**")
     st.caption("Las usan Horas adicionales (como valor por defecto de la tarifa), "
-               "Ayudantías y la Carga académica. Un cambio se aplica a partir de la próxima "
-               "valorización.")
+               "Ayudantías, la Carga académica y las Prácticas pre-profesionales (Practicas, "
+               "S/ por hora de practicante). Un cambio se aplica a partir de la próxima "
+               "valorización; en las prácticas, la próxima vez que se guarde cada planilla.")
     _editor_tarifas(repo, usuario, todas[~es_puesto].reset_index(drop=True), "horas",
                     {"HOJA_ORIGEN": st.column_config.TextColumn("Planilla", disabled=True),
                      "TIPO": st.column_config.TextColumn("Tipo", disabled=True),

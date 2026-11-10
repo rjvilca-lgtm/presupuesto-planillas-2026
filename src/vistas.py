@@ -23,7 +23,7 @@ from .repositorio import matriz_desde_entrada
 from .config import (CONCEPTO_ACADEMICAS, CONCEPTO_CRONOLOGICAS, FACTOR_CRONOLOGICAS,
                      HORAS_PLAN_TC, MESES, MESES_ABBR, SEMESTRES, TOLERANCIA_HORAS,
                      a_hhmm, a_minutos, cfg_de, de_hhmm, dims_fila, es_concepto, etiqueta_dim,
-                     meta_horas)
+                     meses_de, meta_horas, semestres_de)
 from .validacion import formato_soles
 
 
@@ -256,10 +256,10 @@ def _semilla(cfg: dict, roster: pd.DataFrame, guardado=None) -> pd.DataFrame:
     return base.reset_index(drop=True)
 
 
-def _semestre_activo(hoja: str) -> str:
+def _semestre_activo(hoja: str, semestres: dict = SEMESTRES) -> str:
     """Selector de semestre: reduce a 6 las columnas de mes visibles.
     Los 12 meses siguen en los datos del editor (ver grilla())."""
-    opciones = list(SEMESTRES)
+    opciones = list(semestres)
     key = f"semestre_{hoja}"
     if hasattr(st, "segmented_control"):
         return st.segmented_control(
@@ -285,8 +285,8 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
     dims = dims_fila(cfg)
     metrica = cfg["metrica"]
     unidad = cfg.get("unidad") or ("horas" if metrica == "HORAS" else "importe (S/)")
-    semestre = _semestre_activo(hoja)
-    meses_visibles = SEMESTRES[semestre]
+    semestre = _semestre_activo(hoja, semestres_de(cfg))
+    meses_visibles = semestres_de(cfg)[semestre]
 
     colcfg = {
         "DNI": st.column_config.TextColumn("DNI", disabled=cfg["usa_roster"]),
@@ -410,7 +410,7 @@ def columnas_excel(cfg: dict, tarifas: dict) -> list:
         else:
             cols.append(Columna(col, titulo, "texto", ancho=40 if col == "CONCEPTO_2" else 24,
                                 obligatoria=col in cfg["dimensiones"]))
-    for m in MESES:
+    for m in meses_de(cfg):
         cols.append(Columna(m, MESES_ABBR[m], "numero", ancho=10))
     return cols
 
@@ -473,7 +473,7 @@ def _excel_grilla(cfg, ccos, tarifas, origen, editado, solo_lectura,
     if nuevo is None:
         return
     base = _semilla(cfg, roster_vacio(), None) if nuevo.empty else nuevo
-    for c in _columnas_fila(cfg):
+    for c in _columnas_fila(cfg) + MESES:   # la plantilla trae solo los meses admitidos
         if c not in base:
             base[c] = None
     base = base[_columnas_fila(cfg) + MESES].reset_index(drop=True)

@@ -71,7 +71,8 @@ from src.borrador import (aviso_al_salir, autoguardar, firma, marcar_guardado,
                           mostrar_indicador, indicador, pendiente, toca_autoguardar)
 from src.diagnostico import iniciar_medicion, iniciar_vigilante, registrar, vista_diagnostico
 from src.carga_academica import consulta_carga_academica, registro_carga_academica
-from src.config import MESES, PUESTOS_NUEVOS, cfg_de, dims_fila, es_ceco_postgrado
+from src.config import (MESES, PRACTICAS, PUESTOS_NUEVOS, cfg_de, dims_fila,
+                        es_ceco_postgrado, tarifa_fija)
 from src.flujo import (aviso_departamento, leer_flujo, marcar, ahora, panel_flujo,
                        vista_admin, vista_resumen)
 from src.reporte import vista_reporte
@@ -122,6 +123,9 @@ def _main(contexto):
         pestañas.append(("Ayudantías · áreas", lambda: vista_areas(repo, fl, usuario)))
     if usuario.presupuesto or usuario.puestos:
         pestañas.append(("Puestos nuevos", lambda: vista_puestos(repo, fl, usuario)))
+    if usuario.presupuesto or usuario.departamentos or usuario.areas:
+        pestañas.append(("Prácticas pre-profesionales",
+                         lambda: vista_practicas(repo, fl, usuario)))
     if usuario.presupuesto or usuario.dga:
         pestañas.append(("Carga académica · registro (DGA)",
                          lambda: registro_carga_academica(repo, fl, usuario)))
@@ -329,6 +333,45 @@ def vista_puestos(repo, fl, usuario):
     borrador.registrar_version(repo, PUESTOS_NUEVOS, origen)
     _renderizar_grilla(repo, fl, PUESTOS_NUEVOS, cfg, ccos, roster_vacio(), tarifas, origen,
                        entrada[entrada["HOJA_ORIGEN"] == PUESTOS_NUEVOS], solo_lectura, usuario)
+
+
+def vista_practicas(repo, fl, usuario):
+    """Prácticas pre-profesionales: horas de practicante por mes (marzo a
+    julio y agosto a diciembre) de cada departamento y área no académica. Las
+    registran los usuarios de departamento y los de ayudantías (rol AREA);
+    Presupuesto, todos. Cada hora vale la tarifa única de tarifas_2027 que
+    Desarrollo Humano cambia en su pestaña › Tarifas."""
+    cfg = cfg_de(PRACTICAS)
+    deptos, areas = dict(repo.departamentos()), dict(repo.areas())
+    unidades = {**deptos, **areas}
+    if not usuario.presupuesto:
+        propias = set(usuario.departamentos) | set(usuario.areas)
+        unidades = {c: n for c, n in unidades.items() if c in propias}
+    if not unidades:
+        st.info("No tienes departamentos ni áreas asignados.", icon="🔒")
+        return
+    origen = st.selectbox("Departamento o área", list(unidades), key="unidad_practicas",
+                          format_func=lambda c: f"{c} · {unidades[c]}")
+    st.session_state["_pantalla_detalle"] = origen
+    tarifas = repo.tarifas(PRACTICAS)
+    tarifa = tarifa_fija(tarifas)
+    if not tarifa:
+        st.warning("Aún no está cargada la tarifa por hora de las prácticas. La Oficina de "
+                   "Presupuesto debe ejecutar `sql/crear_practicas_2027.sql` en Azure.",
+                   icon="⚠️")
+        return
+    st.caption(f"{cfg['ayuda']} Cada hora se valoriza a **S/ {tarifa:,.2f}** (lo fija "
+               "Desarrollo Humano).")
+    solo_lectura = aviso_departamento(fl, origen)
+    ccos = repo.centros_costo(origen) if origen in deptos else repo.centros_costo_area(origen)
+    if ccos.empty:
+        st.warning(f"{origen} no tiene centros de costo 2027 asignados. Pídelo a la Oficina "
+                   "de Presupuesto.", icon="⚠️")
+        return
+    entrada = repo.entrada(origen)
+    borrador.registrar_version(repo, PRACTICAS, origen)
+    _renderizar_grilla(repo, fl, PRACTICAS, cfg, ccos, roster_vacio(), tarifas, origen,
+                       entrada[entrada["HOJA_ORIGEN"] == PRACTICAS], solo_lectura, usuario)
 
 
 def _costos_puestos(tarifas):
@@ -601,6 +644,9 @@ def guardar_borrador(repo, hoja, origen, editado, email, sps=(), gestor=False, f
             momento = ahora()
             marcar(repo, origen, FECHA_GUARDADO=momento, FECHA_VALORIZACION=momento)
             return True, f"{cfg['etiqueta']}: {n} registro(s) guardado(s) y valorizado(s)."
+        if hoja == PRACTICAS:
+            return True, (f"{cfg['etiqueta']}: {total_horas(hoja, editado):,.1f} hora(s) "
+                          f"guardada(s) en {conteo(editado)[0]} línea(s).")
         if hoja == PUESTOS_NUEVOS:
             return True, (f"{cfg['etiqueta']}: {contar_puestos(editado)} puesto(s) "
                           f"guardado(s) ({int(round(total_horas(hoja, editado)))} "

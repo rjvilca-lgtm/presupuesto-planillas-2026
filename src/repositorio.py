@@ -95,6 +95,7 @@ _CCOS_DEMO = {
 _TARIFAS_DEMO = {
     "Horas Adicionales": {"Titular": 152.0, "Jefe de practica": 105.0, "Asistente": 100.0},
     "Ayudantias": {"Ayudantía": 4.5},
+    "Practicas": {"Hora de práctica": 9.0},
     # Montos de ejemplo (los reales van solo en Azure)
     "Puestos nuevos": {"NUEVO · ANALISTA": 4000.0, "NUEVO · AUXILIAR": 2500.0,
                        "UPGRADE · ASISTENTE A ANALISTA": 500.0},
@@ -870,7 +871,7 @@ class RepositorioSQL:
         for a, _ in self.areas():
             self.centros_costo_area(a)
         for hoja, cfg in PLANILLAS.items():
-            if cfg["tarifa"] == "catalogo":
+            if cfg["tarifa"] in ("catalogo", "fija"):
                 self.tarifas(hoja)
         self.valorizacion(2026, deptos)
         print(f"[cache] precalentada en {_t.time() - t0:.1f}s", flush=True)
@@ -1861,12 +1862,12 @@ def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list
     catálogo (server-side) cuando corresponde; el usuario nunca la teclea.
     MES sale como número ("1".."12") y la métrica cae en cfg["columna_destino"]
     si está definida (ver config.py)."""
-    from .config import MESES, dims_fila
+    from .config import MESES, dims_fila, meses_de, tarifa_fija
     cfg = cfg_de(hoja)
     dims = dims_fila(cfg)
     metrica = cfg["metrica"]
     destino = cfg.get("columna_destino", metrica)
-    meses = [m for m in MESES if m in df.columns]
+    meses = [m for m in meses_de(cfg) if m in df.columns]
 
     # La tarifa editable viaja como columna propia de la fila
     ids = dims + (["TARIFA"] if cfg.get("tarifa_editable") and "TARIFA" in df else [])
@@ -1885,7 +1886,7 @@ def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list
     info_destino = cfg.get("info_destino", {})
     cols += list(info_destino.values())
     tarifas = {}
-    if cfg["tarifa"] == "catalogo":
+    if cfg["tarifa"] in ("catalogo", "fija"):
         cols.append("TARIFA")
         tarifas = repo.tarifas(hoja)
 
@@ -1903,6 +1904,8 @@ def preparar_filas(hoja: str, origen: str, df: pd.DataFrame, repo) -> tuple[list
                 if cfg.get("tarifa_editable") else None
             if propia is not None and pd.notna(propia) and propia > 0:
                 reg["TARIFA"] = float(propia)
+        elif cfg["tarifa"] == "fija":
+            reg["TARIFA"] = tarifa_fija(tarifas)
         if cfg.get("guardar_importe"):
             reg["IMPORTE"] = round(reg[destino] * reg["TARIFA"], 2)
         filas.append([reg[c] for c in cols])

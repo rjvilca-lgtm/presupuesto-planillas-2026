@@ -8,8 +8,9 @@ dinámico se ignoran) y se estima el monto para el feedback en vivo.
 
 import pandas as pd
 
-from .config import (CONCEPTO_ACADEMICAS, MESES, TOLERANCIA_HORAS, a_hhmm, a_minutos,
-                     cfg_de, dims_fila, es_concepto, meta_horas)
+from .config import (CONCEPTO_ACADEMICAS, MESES, MESES_ABBR, TOLERANCIA_HORAS, a_hhmm,
+                     a_minutos, cfg_de, dims_fila, es_concepto, meses_de, meta_horas,
+                     tarifa_fija)
 
 
 def formato_soles(valor: float) -> str:
@@ -47,6 +48,8 @@ def estimar_importe(hoja: str, df: pd.DataFrame, tarifas: dict) -> float:
         return float(suma_fila.sum())
     if cfg["tarifa"] == "catalogo":
         return float((suma_fila * tarifa_por_fila(cfg, df, tarifas)).sum())
+    if cfg["tarifa"] == "fija":
+        return float(suma_fila.sum() * (tarifa_fija(tarifas) or 0.0))
     return 0.0  # tarifa server: el importe lo calcula el procedimiento en SQL
 
 
@@ -116,6 +119,13 @@ def validar(hoja: str, df: pd.DataFrame, ccos_validos: set, tarifas: dict,
     val = _matriz_valores(df)
     if (val < 0).any().any():
         errores.append("Hay valores negativos. Usa cantidades mayores o iguales a cero.")
+    fuera_meses = [m for m in val.columns if m not in meses_de(cfg) and (val[m] > 0).any()]
+    if fuera_meses:
+        errores.append("Esta planilla no admite valores en: "
+                       + ", ".join(MESES_ABBR[m] for m in fuera_meses) + ". Bórralos.")
+    if cfg["tarifa"] == "fija" and not tarifa_fija(tarifas):
+        errores.append("Falta la tarifa por hora de esta planilla. Avisa a la Oficina de "
+                       "Presupuesto.")
 
     sub = df[_filas_con_datos(df)]
     for dim in dims:
