@@ -622,6 +622,10 @@ def _leer_medio(server, port, database, user, password,
     return _consultar(server, port, database, user, password, sql, params)
 
 
+# Filas de PLANILLA fuera del centro '0' (las NULL se quedan)
+SIN_CECO_0 = "(p.CENTRO_COSTO IS NULL OR LTRIM(RTRIM(p.CENTRO_COSTO)) <> '0')"
+
+
 # Valorización 2027 (PLANILLA): solo cambia al valorizar, al guardar las
 # ayudantías de un área (se valorizan al guardar), al importar DDH o al limpiar.
 # Se guarda 1 hora y se vacía en esos momentos, no con cada guardado (la
@@ -1280,7 +1284,8 @@ class RepositorioSQL:
             "ORDER BY a.ID DESC")
 
     def valorizacion(self, anio: int, origenes: list[str]) -> pd.DataFrame:
-        """Montos de PLANILLA por departamento (ORIGEN_2) y planilla (ORIGEN).
+        """Sin el centro '0' (Gestión de Dirección: la valoriza Desarrollo
+        Humano, no el departamento). Montos de PLANILLA por departamento (ORIGEN_2) y planilla (ORIGEN).
         2027: con partida, centro de costo y mes (el reporte los usa). Años
         anteriores: solo el total por departamento y planilla, que es lo único
         que el reporte compara; el detalle (26 mil filas) tardaba ~35 s en Basic,
@@ -1293,6 +1298,7 @@ class RepositorioSQL:
             # todos los usuarios (cada uno filtra lo suyo); medio día en memoria
             sql = ("SELECT p.ORIGEN_2 AS DEPTO, p.ORIGEN, CAST(SUM(p.IMPORTE) AS float) AS IMPORTE "
                    "FROM PLANILLA p WHERE p.AÑO = CAST(%s AS varchar(20)) "
+                   f"AND {SIN_CECO_0} "
                    "GROUP BY p.ORIGEN_2, p.ORIGEN")
             todo = _leer_historico(self._server, self._port, self._database, self._user,
                                    self._password, sql, (str(anio),))
@@ -1305,6 +1311,7 @@ class RepositorioSQL:
                # AÑO es varchar: compararlo con texto deja usar IX_PLANILLA_ANIO
                # (con un número SQL convierte toda la columna y la recorre entera)
                f"WHERE p.AÑO = CAST(%s AS varchar(20)) AND p.ORIGEN_2 IN ({marcas}) "
+               f"AND {SIN_CECO_0} "
                "GROUP BY p.ORIGEN_2, p.ORIGEN, p.PARTIDA, pp.Descripcion, p.CENTRO_COSTO, p.MES")
         return _leer_valorizado(self._server, self._port, self._database, self._user,
                                 self._password, sql, (str(anio), *origenes))

@@ -56,7 +56,8 @@ def _tabla_soles(df: pd.DataFrame, **kw):
 
 def vista_reporte(repo, fl, usuario, deptos):
     st.caption("Montos valorizados (PLANILLA) en soles. 2027 incluye solo lo que ya se "
-               "valorizó con la app; 2026 es la referencia en el mismo alcance.")
+               "valorizó con la app; 2026 es la referencia en el mismo alcance. No incluye "
+               "el centro de costo 0 (Gestión de Dirección), que valoriza Desarrollo Humano.")
     areas = repo.areas()
     alcance = _alcance(usuario, deptos, areas)
     nombres = {**dict(deptos), **dict(areas), DGA: "Carga académica (DGA)",
