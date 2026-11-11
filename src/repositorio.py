@@ -211,6 +211,20 @@ class RepositorioDemo:
     def horas_dtc(self) -> pd.DataFrame:
         return pd.DataFrame(columns=["MES", "CENTRO_COSTO", "ORIGEN", "DNI", "NOMBRE", "HORAS"])
 
+    def horas_tc(self) -> pd.DataFrame:
+        partes = [df.assign(ORIGEN=o) for (h, o), df in self._entrada.items()
+                  if h in ("1. Plan TC-I", "Plan TC-II") and len(df)]
+        cols = ["ORIGEN", "HOJA_ORIGEN", "DNI", "NOMBRE", "CENTRO_COSTO", "CONCEPTO", "HORAS"]
+        return pd.concat(partes)[cols] if partes else pd.DataFrame(columns=cols)
+
+    def horas_docentes_todos(self) -> pd.DataFrame:
+        filas = [r for d, _ in self.departamentos() for r in
+                 self.roster(d).assign(DPTO=d).itertuples(index=False)]
+        df = pd.DataFrame(filas)
+        if df.empty:
+            return pd.DataFrame(columns=["DPTO", "DNI", "NOMBRE", "HORAS"])
+        return df.rename(columns={"HORAS_META": "HORAS"})[["DPTO", "DNI", "NOMBRE", "HORAS"]]
+
     def limpiar_cache(self):
         pass
 
@@ -1032,6 +1046,19 @@ class RepositorioSQL:
     def horas_docentes_todos(self) -> pd.DataFrame:
         df = self._leer_vivo("SELECT DPTO, DNI, NOMBRE, CAST(HORAS AS float) AS HORAS "
                              "FROM HORAS_DOCENTES ORDER BY DPTO, NOMBRE")
+        return df
+
+    def horas_tc(self) -> pd.DataFrame:
+        """Horas de los planes TC 2027 (TC-I y TC-II) de todos los departamentos,
+        por docente, centro de costo y concepto: reporte de Desarrollo Humano."""
+        df = self._leer_vivo(
+            "SELECT ORIGEN, HOJA_ORIGEN, LTRIM(RTRIM(DNI)) AS DNI, MAX(NOMBRE) AS NOMBRE, "
+            "LTRIM(RTRIM(CENTRO_COSTO)) AS CENTRO_COSTO, LTRIM(RTRIM(CONCEPTO)) AS CONCEPTO, "
+            "CAST(SUM(ISNULL(HORAS, 0)) AS float) AS HORAS FROM DATOS_ENTRADA "
+            "WHERE PRESUPUESTO = %s AND HOJA_ORIGEN IN ('1. Plan TC-I', 'Plan TC-II') "
+            "GROUP BY ORIGEN, HOJA_ORIGEN, LTRIM(RTRIM(DNI)), LTRIM(RTRIM(CENTRO_COSTO)), "
+            "LTRIM(RTRIM(CONCEPTO))", (PRESUPUESTO,))
+        df["HORAS"] = pd.to_numeric(df["HORAS"], errors="coerce")
         return df
 
     def dni_con_plan_tc(self) -> pd.DataFrame:

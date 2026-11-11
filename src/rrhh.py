@@ -18,20 +18,23 @@ en los secrets para una cuenta de base de datos propia para salarios.
 import pandas as pd
 import streamlit as st
 
-from . import carga_ddh
+from . import carga_ddh, reporte_tc
 from .plantillas import contar_movimientos, filas_txt, leer, plantilla, unificar_dni
-from .repositorio import COLS_REMUNERACION
+from .repositorio import COLS_REMUNERACION, _hora_lima
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def vista_desarrollo_humano(repo, usuario, deptos):
-    t_imp, t_ddh, t_tar, t_aud = st.tabs(["Importar docentes y salarios", "Valorización DDH",
-                                          "Tarifas", "Registro de cambios"],
-                                         on_change="rerun", key="tabs_rrhh")
+    t_imp, t_hrs, t_ddh, t_tar, t_aud = st.tabs(
+        ["Importar docentes y salarios", "Horas docentes TC", "Valorización DDH", "Tarifas",
+         "Registro de cambios"], on_change="rerun", key="tabs_rrhh")
     if t_imp.open:
         with t_imp:
             _importar(repo, usuario, deptos)
+    if t_hrs.open:
+        with t_hrs:
+            _horas_tc(repo, deptos)
     if t_ddh.open:
         with t_ddh:
             _valorizacion_ddh(repo, usuario)
@@ -261,6 +264,47 @@ def _valorizacion_ddh(repo, usuario):
         st.session_state["_res_ddh"] = res
         st.session_state["_ver_ddh"] = st.session_state.get("_ver_ddh", 0) + 1
         st.rerun()
+
+
+# ------------------------------------------------------- horas docentes TC
+
+def _horas_tc(repo, deptos):
+    st.caption("Horas de los docentes TC 2027 según los planes de trabajo que guardaron "
+               "los departamentos (horas cronológicas semanales, en decimal). Lo principal "
+               "es la **Gestión de Dirección** (centro de costo 0), que la app no valoriza: "
+               "la valoriza Desarrollo Humano. Son borradores: cambian cada vez que un "
+               "departamento guarda su plan. No incluye remuneraciones.")
+    tablas = reporte_tc.construir(repo.horas_tc(), repo.horas_docentes_todos(), deptos,
+                                  repo.todos_centros_costo())
+    res, direc = tablas["Resumen por docente"], tablas["Gestión de Dirección"]
+    m = st.columns(4)
+    m[0].metric("Docentes con plan", int((res["Plan guardado"] != "Sin plan").sum()),
+                help=f"{len(res):,} en el padrón o con plan")
+    m[1].metric("Con Gestión de Dirección", len(direc))
+    m[2].metric("Gestión de Dirección · I", f"{direc['Gestión de Dirección I'].sum():,.2f} h")
+    m[3].metric("Gestión de Dirección · II", f"{direc['Gestión de Dirección II'].sum():,.2f} h")
+
+    generado = _hora_lima().strftime("%d/%m/%Y %H:%M")
+    st.download_button("⬇ Descargar reporte (Excel)", reporte_tc.excel(tablas, generado),
+                       file_name="horas_docentes_tc_2027.xlsx", mime=XLSX, type="primary",
+                       help="Hojas: Gestión de Dirección, Resumen por docente, Por "
+                            "departamento, Detalle (centro de costo y concepto) y Notas.")
+
+    horas = st.column_config.NumberColumn(format="%.2f")
+    pct = st.column_config.NumberColumn(format="percent")
+    cfg = {c: (pct if c.startswith("%") else horas) for c in direc.columns
+           if pd.api.types.is_float_dtype(direc[c])}
+    st.subheader("Gestión de Dirección")
+    if direc.empty:
+        st.info("Ningún plan TC guardado tiene horas de Gestión de Dirección.", icon="ℹ️")
+    else:
+        st.caption("% Dirección = horas de Gestión de Dirección / horas del plan del semestre.")
+        st.dataframe(direc, hide_index=True, width="stretch", column_config=cfg)
+    st.subheader("Por departamento")
+    dep = tablas["Por departamento"]
+    st.dataframe(dep, hide_index=True, width="stretch",
+                 column_config={c: horas for c in dep.columns
+                                if pd.api.types.is_float_dtype(dep[c])})
 
 
 # ------------------------------------------------------------- tarifas
