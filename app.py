@@ -338,7 +338,8 @@ def vista_puestos(repo, fl, usuario):
     entrada = repo.entrada(origen)
     borrador.registrar_version(repo, PUESTOS_NUEVOS, origen)
     _renderizar_grilla(repo, fl, PUESTOS_NUEVOS, cfg, ccos, roster_vacio(), tarifas, origen,
-                       entrada[entrada["HOJA_ORIGEN"] == PUESTOS_NUEVOS], solo_lectura, usuario)
+                       entrada[entrada["HOJA_ORIGEN"] == PUESTOS_NUEVOS], solo_lectura, usuario,
+                       sps=tuple(cfg["sps"]))
 
 
 def vista_practicas(repo, fl, usuario):
@@ -376,7 +377,8 @@ def vista_practicas(repo, fl, usuario):
     entrada = repo.entrada(origen)
     borrador.registrar_version(repo, PRACTICAS, origen)
     _renderizar_grilla(repo, fl, PRACTICAS, cfg, ccos, roster_vacio(), tarifas, origen,
-                       entrada[entrada["HOJA_ORIGEN"] == PRACTICAS], solo_lectura, usuario)
+                       entrada[entrada["HOJA_ORIGEN"] == PRACTICAS], solo_lectura, usuario,
+                       sps=tuple(cfg["sps"]))
 
 
 def _costos_puestos(tarifas):
@@ -648,6 +650,19 @@ def guardar_borrador(repo, hoja, origen, editado, email, sps=(), gestor=False, f
         n, _ = repo.guardar_borrador(hoja, origen, filas, cols, email=email,
                                      version=versiones.get(clave), sps=sps,
                                      al_confirmar=al_confirmar)
+        # Pestañas propias (prácticas, puestos): valorizan al guardar, pero no
+        # marcan el flujo del departamento
+        y_val = " y valorizado(s)" if sps else ""
+        if hoja == PRACTICAS:
+            return True, (f"{cfg['etiqueta']}: {total_horas(hoja, editado):,.1f} hora(s) "
+                          f"guardada(s){' y valorizada(s)' if sps else ''} en "
+                          f"{conteo(editado)[0]} línea(s).")
+        if hoja == PUESTOS_NUEVOS:
+            return True, (f"{cfg['etiqueta']}: {contar_puestos(editado)} puesto(s) "
+                          f"guardado(s){y_val} ({int(round(total_horas(hoja, editado)))} "
+                          f"{cfg.get('unidad', 'puestos')}-mes).")
+        if cfg.get("pestaña_propia"):
+            return True, f"{cfg['etiqueta']}: {n} registro(s) guardado(s){y_val}."
         if sps:
             # El área DGA comparte código con la carga académica: sus ayudantías
             # no deben marcarla como guardada ni valorizada en el flujo
@@ -655,15 +670,6 @@ def guardar_borrador(repo, hoja, origen, editado, email, sps=(), gestor=False, f
                 momento = ahora()
                 marcar(repo, origen, FECHA_GUARDADO=momento, FECHA_VALORIZACION=momento)
             return True, f"{cfg['etiqueta']}: {n} registro(s) guardado(s) y valorizado(s)."
-        if hoja == PRACTICAS:
-            return True, (f"{cfg['etiqueta']}: {total_horas(hoja, editado):,.1f} hora(s) "
-                          f"guardada(s) en {conteo(editado)[0]} línea(s).")
-        if hoja == PUESTOS_NUEVOS:
-            return True, (f"{cfg['etiqueta']}: {contar_puestos(editado)} puesto(s) "
-                          f"guardado(s) ({int(round(total_horas(hoja, editado)))} "
-                          f"{cfg.get('unidad', 'puestos')}-mes).")
-        if cfg.get("pestaña_propia"):   # no se valoriza: no marca el flujo del depto
-            return True, f"{cfg['etiqueta']}: {n} registro(s) guardado(s)."
         marcar(repo, origen, FECHA_GUARDADO=ahora())
         if gestor:   # el gestor (investigación o ayudantías) no valoriza: lo hace el departamento
             return True, (f"{cfg['etiqueta']}: {n} registro(s) guardado(s). El departamento "

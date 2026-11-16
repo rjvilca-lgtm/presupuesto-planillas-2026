@@ -1073,14 +1073,21 @@ class RepositorioSQL:
 
     def guardar_tarifas(self, cambios: list[tuple], email: str):
         """cambios: (hoja, tipo, tarifa_anterior, tarifa_nueva). Las tarifas no
-        son confidenciales: la auditoría guarda los valores."""
+        son confidenciales: la auditoría guarda los valores.
+        Prácticas y puestos nuevos se valorizan con la tarifa vigente: al cambiarla
+        se vuelven a valorizar (todos los departamentos) en la misma transacción."""
         def trabajo(cur):
             for hoja, tipo, antes, despues in cambios:
                 cur.execute("UPDATE tarifas_2027 SET TARIFA = %s "
                             "WHERE HOJA_ORIGEN = %s AND TIPO = %s", [despues, hoja, tipo])
                 self._auditar(cur, email, "tarifas_2027", "CAMBIO",
                               detalle=f"{tipo} ({hoja}): {antes} -> {despues}")
+            for sp in sps_por_tarifa(cambios):
+                cur.execute(f"EXEC {sp}")   # sin @OrigenEntrada: todos
         self._transaccion(self._conn(), trabajo)
+        if sps_por_tarifa(cambios):
+            self.limpiar_cache_trabajo()
+            _leer_valorizado.clear()
 
     @contextmanager
     def _conn_rrhh(self):
@@ -1861,6 +1868,19 @@ def matriz_desde_entrada(hoja: str, filas: pd.DataFrame) -> pd.DataFrame:
     ancho[MESES] = ancho[MESES].where(ancho[MESES] != 0)
     ancho.columns.name = None
     return ancho[claves + MESES]
+
+
+def sps_por_tarifa(cambios: list[tuple]) -> list[str]:
+    """Procedimientos que hay que volver a ejecutar (para todos los departamentos)
+    al cambiar tarifas: los de las pestañas propias (prácticas, puestos nuevos),
+    que valorizan con la tarifa vigente. Las demás planillas guardan la tarifa en
+    la fila o la toman al valorizar el departamento."""
+    sps = []
+    for hoja in dict.fromkeys(c[0] for c in cambios):
+        cfg = PLANILLAS.get(hoja, {})
+        if cfg.get("pestaña_propia"):
+            sps += [sp for sp, _ in cfg["sps"] if sp not in sps]
+    return sps
 
 
 def sps_departamento() -> list[tuple]:

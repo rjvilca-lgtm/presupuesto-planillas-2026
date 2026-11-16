@@ -276,7 +276,9 @@ PLANILLAS = {
         "tarifa": "catalogo",
         "catalogo_key": "TIPO",
         "usa_roster": False,
-        "sps": [],
+        # Al guardar se valoriza en PLANILLA: partida 94.1.1.1.001 en el centro del
+        # puesto, con el costo vigente (sql/crear_sps_practicas_puestos_2027.sql)
+        "sps": [("sp_Valorizar_PuestosNuevos_2027", True)],
         "ayuda": "Una fila por puesto: el centro de costo, el puesto (NUEVO, o UPGRADE si "
                  "es un ascenso: se presupuesta la diferencia de sueldo) y por qué se "
                  "necesita. En cada mes en que el puesto debe estar cubierto escribe 1 "
@@ -287,7 +289,8 @@ PLANILLAS = {
     # ayudantías). Se piden horas de practicante por mes, solo de marzo a julio y
     # de agosto a diciembre. Cada hora vale la tarifa única de tarifas_2027
     # (HOJA_ORIGEN 'Practicas', sql/crear_practicas_2027.sql), que Desarrollo
-    # Humano cambia en su pestaña › Tarifas. No hay sp: IMPORTE = horas × tarifa.
+    # Humano cambia en su pestaña › Tarifas. IMPORTE = horas × tarifa; al guardar se
+    # valoriza en PLANILLA (partida 94.1.1.1.021, sql/crear_sps_practicas_puestos_2027.sql).
     "Practicas": {
         "etiqueta": "Prácticas pre-profesionales",
         "pestaña_propia": True,
@@ -300,7 +303,7 @@ PLANILLAS = {
         "semestres": {"I semestre (Mar-Jul)": MESES[2:7],
                       "II semestre (Ago-Dic)": MESES[7:]},
         "usa_roster": False,
-        "sps": [],
+        "sps": [("sp_Valorizar_Practicas_2027", True)],
         "ayuda": "Una fila por pedido de practicantes: el centro de costo, la actividad "
                  "o por qué se necesita y, en cada mes, las horas de práctica (la suma "
                  "de todos los practicantes de esa fila). Solo de marzo a julio y de "
