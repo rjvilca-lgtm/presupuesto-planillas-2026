@@ -31,6 +31,11 @@ from .validacion import estimar_importe, formato_soles, total_horas, validar
 # Perú no tiene horario de verano: UTC-5 fijo, sin depender de tzdata
 LIMA = timezone(timedelta(hours=-5))
 DGA = CARGA_ACADEMICA["origen"]
+# ESTADO_DEPARTAMENTO.BLOQUEO = SOLO_INV: Presupuesto deja abierta solo la
+# planilla de Investigación (aunque el departamento esté bloqueado o cerrado:
+# la carga académica no depende de ella); el resto queda en solo lectura.
+SOLO_INV = "SOLO_INV"
+INVESTIGACION = "Investigacion"
 
 
 def ahora() -> datetime:
@@ -72,11 +77,20 @@ class Flujo:
         guardado, valorizado = _fecha(e.get("FECHA_GUARDADO")), _fecha(e.get("FECHA_VALORIZACION"))
         return guardado is not None and (valorizado is None or guardado > valorizado)
 
-    def bloqueo(self, depto: str) -> tuple[bool, str]:
-        """(bloqueado, motivo para mostrar al usuario)."""
+    def solo_investigacion(self, depto: str) -> bool:
+        return self.disponible and self.estado(depto).get("BLOQUEO") == SOLO_INV
+
+    def bloqueo(self, depto: str, hoja: str | None = None) -> tuple[bool, str]:
+        """(bloqueado, motivo para mostrar al usuario). hoja: la planilla que
+        se va a editar (con SOLO_INV, solo Investigación queda abierta)."""
         if not self.disponible:
             return False, ""
         e = self.estado(depto)
+        if e.get("BLOQUEO") == SOLO_INV:
+            if hoja == INVESTIGACION:
+                return False, ""
+            return True, ("bloqueado por Presupuesto: solo está habilitada la planilla de "
+                          "Investigación.")
         if e.get("CERRADO"):
             return True, (f"cerrado desde el {fmt(e.get('FECHA_CIERRE'))}. Para modificarlo, "
                           "pide a Presupuesto que lo reabra.")
@@ -177,10 +191,16 @@ def panel_flujo(fl: Flujo):
 </div>""", unsafe_allow_html=True)
 
 
-def aviso_departamento(fl: Flujo, depto: str) -> bool:
+def aviso_departamento(fl: Flujo, depto: str, hoja: str | None = None) -> bool:
     """Muestra el aviso que corresponde al departamento. Devuelve si está
     bloqueado (las planillas pasan a solo lectura)."""
-    bloqueado, motivo = fl.bloqueo(depto)
+    # En «Resumen y valorización» se puede valorizar Investigación
+    bloqueado, motivo = fl.bloqueo(depto, INVESTIGACION if hoja == "RESUMEN" else hoja)
+    if fl.solo_investigacion(depto) and not bloqueado:
+        st.info(f"🔬 Presupuesto habilitó solo la planilla de **Investigación** de {depto}. "
+                "Puedes modificarla y valorizarla desde «Resumen y valorización»; las demás "
+                "planillas están en solo lectura.")
+        return False
     if bloqueado:
         st.warning(f"🔒 {depto} está {motivo} Puedes ver tus datos, pero no modificarlos.")
         return True
@@ -226,7 +246,8 @@ def _revisar_planilla(repo, hoja, filas, ccos_validos, roster):
 def vista_resumen(repo, fl: Flujo, origen: str, ccos, roster, estructura):
     st.caption("Revisa lo que guardaste en cada planilla y valoriza tu departamento. "
                "Puedes volver a modificar y valorizar las veces que necesites.")
-    bloqueado, _ = fl.bloqueo(origen)
+    solo_inv = fl.solo_investigacion(origen)
+    bloqueado, _ = fl.bloqueo(origen, INVESTIGACION if solo_inv else None)
     resultado = st.session_state.pop(f"_resultado_valorizar_{origen}", None)
     if resultado:
         (st.success if resultado[0] else st.error)(resultado[1],
@@ -249,6 +270,13 @@ def vista_resumen(repo, fl: Flujo, origen: str, ccos, roster, estructura):
     st.dataframe(pd.DataFrame(filas_tabla, columns=["Planilla", "Registros guardados",
                                                     "Resumen", "Estado"]),
                  hide_index=True, width="stretch")
+    if solo_inv:
+        # Solo se valoriza Investigación: las demás planillas no cambian
+        observaciones = {k: v for k, v in observaciones.items()
+                         if k == cfg_de(INVESTIGACION)["etiqueta"]}
+        entrada = entrada[entrada["HOJA_ORIGEN"] == INVESTIGACION]
+        st.info("🔬 Presupuesto habilitó solo **Investigación**: el botón valoriza solo esa "
+                "planilla; lo demás ya valorizado no cambia.")
     for etiqueta, errores in observaciones.items():
         with st.expander(f"Observaciones · {etiqueta}", expanded=True):
             for e in errores:
@@ -266,11 +294,12 @@ def vista_resumen(repo, fl: Flujo, origen: str, ccos, roster, estructura):
               "Aún no hay planillas guardadas." if sin_datos else "")
     if motivo:
         st.caption(motivo)
-    if st.button("Valorizar departamento", type="primary", width="stretch",
-                 disabled=bool(motivo), key=f"btn_valorizar_{origen}"):
-        _dialogo_valorizar(repo, origen)
+    if st.button("Valorizar Investigación" if solo_inv else "Valorizar departamento",
+                 type="primary", width="stretch", disabled=bool(motivo),
+                 key=f"btn_valorizar_{origen}"):
+        _dialogo_valorizar(repo, origen, solo_inv)
 
-    if origen in DEPTOS_PRIMERO:
+    if origen in DEPTOS_PRIMERO and not solo_inv:
         st.divider()
         st.markdown("**Cerrar el departamento** · Paso necesario para que la DGA pueda "
                     "valorizar la carga académica.")
@@ -294,15 +323,20 @@ def vista_resumen(repo, fl: Flujo, origen: str, ccos, roster, estructura):
 
 
 @st.dialog("Valorizar departamento", width="large")
-def _dialogo_valorizar(repo, origen):
-    st.write(f"Se valorizarán todas las planillas guardadas de **{origen}** (planes TC, "
-             "horas adicionales, postgrado, investigación y ayudantías). Reemplaza la "
-             "valorización anterior del departamento.")
+def _dialogo_valorizar(repo, origen, solo_inv=False):
+    if solo_inv:
+        st.write(f"Se valorizará solo la planilla de **Investigación** de **{origen}**. "
+                 "Reemplaza su valorización anterior; las demás planillas no cambian.")
+    else:
+        st.write(f"Se valorizarán todas las planillas guardadas de **{origen}** (planes "
+                 "TC, horas adicionales, postgrado, investigación y ayudantías). Reemplaza "
+                 "la valorización anterior del departamento.")
     c1, c2 = st.columns(2)
     if c1.button("Valorizar", type="primary", width="stretch"):
         with st.spinner("Valorizando…"):
             try:
-                repo.valorizar(origen, sps_departamento())
+                repo.valorizar(origen, cfg_de(INVESTIGACION)["sps"] if solo_inv
+                               else sps_departamento())
                 marcar(repo, origen, FECHA_VALORIZACION=ahora())
                 res = (True, f"{origen} valorizado.")
             except Exception as ex:
@@ -401,26 +435,33 @@ def _admin_bloqueos(repo, fl: Flujo, deptos: list[tuple], areas: list[tuple]):
             "Última valorización": fmt(e.get("FECHA_VALORIZACION")),
             "Cambios sin valorizar": "Sí" if fl.cambios_sin_valorizar(d) else "",
             "Cerrado": "🔒 " + fmt(e.get("FECHA_CIERRE")) if fl.cerrado(d) else "",
-            "Decisión de Presupuesto": {"BLOQUEADO": "Bloqueado", "ABIERTO": "Desbloqueado"}
+            "Decisión de Presupuesto": {"BLOQUEADO": "Bloqueado", "ABIERTO": "Desbloqueado",
+                                        SOLO_INV: "Solo Investigación"}
                                        .get(e.get("BLOQUEO"), "Según fecha"),
-            "Situación": "🔒 Bloqueado" if bloqueado else "✏️ Puede modificar",
+            "Situación": ("🔬 Solo Investigación" if fl.solo_investigacion(d) else
+                          "🔒 Bloqueado" if bloqueado else "✏️ Puede modificar"),
         })
     st.dataframe(pd.DataFrame(filas), hide_index=True, width="stretch")
 
     elegidos = st.multiselect("Departamentos", codigos,
                               format_func=lambda d: f"{d} · {nombres[d]}")
-    b1, b2, b3, b4 = st.columns(4)
+    b1, b2, b3, b4, b5 = st.columns(5)
     acciones = [
         (b1, "Bloquear", {"BLOQUEO": "BLOQUEADO"}),
         (b2, "Desbloquear", {"BLOQUEO": "ABIERTO"}),
-        (b3, "Usar fecha general", {"BLOQUEO": None}),
-        (b4, "Reabrir (quitar cierre)", {"CERRADO": False, "FECHA_CIERRE": None}),
+        (b3, "Habilitar solo Investigación", {"BLOQUEO": SOLO_INV}),
+        (b4, "Usar fecha general", {"BLOQUEO": None}),
+        (b5, "Reabrir (quitar cierre)", {"CERRADO": False, "FECHA_CIERRE": None}),
     ]
     for col, etiqueta, campos in acciones:
         if col.button(etiqueta, width="stretch", disabled=not elegidos):
             for d in elegidos:
                 repo.actualizar_estado(d, **campos)
             st.rerun()
+    st.caption("«Habilitar solo Investigación» deja abierta únicamente la planilla de "
+               "Investigación (aunque el departamento esté bloqueado o cerrado) y su "
+               "valorización; todo lo demás queda en solo lectura. Para quitarlo usa "
+               "«Bloquear», «Desbloquear» o «Usar fecha general».")
     st.caption("Desbloquear ignora la fecha de bloqueo para ese departamento. Reabrir "
                "permite que DHUM, DMAT o DCN vuelvan a modificar; mientras no cierren de "
                "nuevo, la carga académica no se puede volver a valorizar.")

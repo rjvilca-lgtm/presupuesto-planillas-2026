@@ -181,7 +181,7 @@ def vista_departamentos(repo, fl, usuario):
         solo_lectura = True
     else:
         panel_flujo(fl)
-        solo_lectura = aviso_departamento(fl, origen)
+        solo_lectura = aviso_departamento(fl, origen, seleccion)
 
     ccos = repo.centros_costo(origen)
     if ccos.empty:
