@@ -11,7 +11,12 @@ remuneración por proporción de horas).
 Las horas se expresan en horas cronológicas semanales, en decimal (3.5 = 3 h
 30 min). Las horas académicas de dictado son informativas: no suman al plan
 (lo que suma es su equivalente cronológico), así que el detalle las marca y
-los totales no las cuentan. No incluye remuneraciones.
+los totales no las cuentan.
+
+No muestra remuneraciones. Solo usa dos de ellas (remuneración mensual y bono
+al cargo) para el «% Unidad transversal»: desde 2027, a los docentes con horas
+de Gestión de Dirección el bono al cargo se les carga 100% a la dirección y el
+resto de la remuneración se reparte por horas (como sp_ValorizarPlanilla_Total_2027).
 """
 
 import io
@@ -40,10 +45,23 @@ def _base(horas: pd.DataFrame) -> pd.DataFrame:
     return h
 
 
+def pct_unidad_transversal(pct_dir: float, remuneracion: float, bono: float) -> float:
+    """Parte de la remuneración que va a la unidad transversal: el bono al cargo
+    entero más el resto en proporción a las horas de dirección. Sin horas de
+    dirección o sin remuneración, queda la proporción de horas."""
+    if pct_dir <= 0 or not remuneracion or remuneracion <= 0:
+        return pct_dir
+    bono = min(max(bono or 0.0, 0.0), remuneracion)
+    return (bono + (remuneracion - bono) * pct_dir) / remuneracion
+
+
 def construir(horas: pd.DataFrame, padron: pd.DataFrame, deptos: list[tuple],
-              cecos: pd.DataFrame) -> dict[str, pd.DataFrame]:
+              cecos: pd.DataFrame, salarios: pd.DataFrame | None = None
+              ) -> dict[str, pd.DataFrame]:
     """Tablas del reporte. horas: ORIGEN, HOJA_ORIGEN, DNI, NOMBRE,
-    CENTRO_COSTO, CONCEPTO, HORAS. padron: DPTO, DNI, NOMBRE, HORAS."""
+    CENTRO_COSTO, CONCEPTO, HORAS. padron: DPTO, DNI, NOMBRE, HORAS.
+    salarios (opcional): DNI, REMUNERACION, BONO_CARGO; sin ellos el «% Unidad
+    transversal» es igual al «% Dirección»."""
     nombres = dict(deptos)
     h = _base(horas)
     cron = h.loc[~h["ACAD"]]
@@ -67,8 +85,15 @@ def construir(horas: pd.DataFrame, padron: pd.DataFrame, deptos: list[tuple],
             "ORIGEN": sin_plan["DPTO"], "DNI": sin_plan["DNI"], "NOMBRE": sin_plan["NOMBRE"],
             "I": 0.0, "II": 0.0, "I_DIR": 0.0, "II_DIR": 0.0})], ignore_index=True)
     res["META"] = pd.to_numeric(res["DNI"].map(meta["HORAS"]), errors="coerce")
+    sal = {}
+    if salarios is not None and not salarios.empty:
+        sal = {str(d).strip(): (float(r or 0), float(b or 0)) for d, r, b in
+               salarios[["DNI", "REMUNERACION", "BONO_CARGO"]].itertuples(index=False)}
     for s in SEMESTRES:
         res[f"{s}_PCT"] = (res[f"{s}_DIR"] / res[s].where(res[s] > 0)).fillna(0.0)
+        res[f"{s}_UT"] = [pct_unidad_transversal(p, *sal.get(d, (0.0, 0.0)))
+                          for p, d in zip(res[f"{s}_PCT"], res["DNI"])]
+    res["BONO"] = res["DNI"].map(lambda d: "Sí" if sal.get(d, (0, 0))[1] > 0 else "")
 
     def cabecera(df):
         df = df.copy()
@@ -80,14 +105,17 @@ def construir(horas: pd.DataFrame, padron: pd.DataFrame, deptos: list[tuple],
     resumen = res.rename(columns={
         "DNI": "DNI", "NOMBRE": "Docente", "META": "Horas del padrón",
         "I": "Horas plan I", "I_DIR": "Gestión de Dirección I", "I_PCT": "% Dirección I",
+        "I_UT": "% Unidad transversal I",
         "II": "Horas plan II", "II_DIR": "Gestión de Dirección II",
-        "II_PCT": "% Dirección II"})
+        "II_PCT": "% Dirección II", "II_UT": "% Unidad transversal II",
+        "BONO": "Bono al cargo"})
     resumen["Plan guardado"] = [
         ", ".join(s for s in SEMESTRES if r[f"Horas plan {s}"] > 0) or "Sin plan"
         for _, r in resumen.iterrows()]
     cols = ["Departamento", "Nombre del departamento", "DNI", "Docente", "Horas del padrón",
-            "Plan guardado", "Horas plan I", "Gestión de Dirección I", "% Dirección I",
-            "Horas plan II", "Gestión de Dirección II", "% Dirección II"]
+            "Plan guardado", "Bono al cargo",
+            "Horas plan I", "Gestión de Dirección I", "% Dirección I", "% Unidad transversal I",
+            "Horas plan II", "Gestión de Dirección II", "% Dirección II", "% Unidad transversal II"]
     resumen = resumen[cols].reset_index(drop=True)
 
     direccion = resumen[(resumen["Gestión de Dirección I"] > 0)
@@ -134,8 +162,12 @@ NOTAS = [
     "Horas cronológicas semanales en decimal (3.50 = 3 h 30 min).",
     "Gestión de Dirección: centro de costo 0. No la valoriza la app; la valoriza "
     "Desarrollo Humano.",
-    "% Dirección = horas de Gestión de Dirección / horas del plan del semestre "
-    "(proporción con la que se reparte la remuneración).",
+    "% Dirección = horas de Gestión de Dirección / horas del plan del semestre.",
+    "% Unidad transversal = parte de la remuneración total que Desarrollo Humano debe "
+    "valorizar en la unidad transversal: el bono al cargo completo más el resto de la "
+    "remuneración en proporción a las horas de dirección. Ejemplo: % Dirección 65%, bono "
+    "45% de la remuneración → 45% + 55% × 65% = 80.75%. El resto lo valoriza la app en "
+    "los centros del departamento. Sin bono al cargo, es igual al % Dirección.",
     "Las horas académicas de dictado son informativas: no suman al plan (suma su "
     "equivalente cronológico). En «Detalle» aparecen marcadas.",
     "«Resumen por docente» incluye a los docentes del padrón sin plan guardado (horas en 0).",

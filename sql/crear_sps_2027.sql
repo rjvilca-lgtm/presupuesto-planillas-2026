@@ -622,8 +622,12 @@ BEGIN
         ;WITH HorasPorProfesor AS (
             SELECT 
                 LTRIM(RTRIM(DNI)) AS DNI, 
-                MES, 
-                SUM(ISNULL(HORAS,0)) AS TotalHoras
+                MES,
+                SUM(ISNULL(HORAS,0)) AS TotalHoras,
+                -- Horas de Gestión de Dirección (centro '0' o concepto «Gestión de Dirección»)
+                SUM(CASE WHEN LTRIM(RTRIM(ISNULL(CENTRO_COSTO,''))) = '0'
+                           OR LTRIM(RTRIM(ISNULL(CONCEPTO,''))) COLLATE Latin1_General_CI_AI = N'Gestion de Direccion'
+                         THEN ISNULL(HORAS,0) ELSE 0 END) AS HorasDireccion
             FROM DATOS_ENTRADA
             WHERE HOJA_ORIGEN = @Origen
               AND ORIGEN = @OrigenEntrada
@@ -642,15 +646,24 @@ BEGIN
                      ISNULL(Bonificacion_Ordinaria_por_Acuerdo_Rem,0)+ISNULL(Bonificacion_por_Representacion,0)+
                      ISNULL(Grado_de_Maestria,0)+ISNULL(Grado_de_Doctorado,0)+
                      ISNULL(Asignacion_por_Vivienda,0)+ISNULL(Asignacion_por_Hijo_Menor,0)+
-                     ISNULL(Vale_por_Alimentos,0)),0) AS TotalRemuneracion
+                     ISNULL(Vale_por_Alimentos,0)),0) AS TotalRemuneracion,
+                ISNULL(Bono_al_Cargo,0) AS BonoCargo
             FROM dbo.Remuneraciones_2027  -- copia 2027 (sql/crear_rol_desarrollo_humano.sql)
         )
         INSERT INTO PLANILLA (CENTRO_COSTO, PARTIDA, MES, IMPORTE, ORIGEN, ORIGEN_2, AÑO)
-        SELECT 
+        SELECT
             de.CENTRO_COSTO,
             '94.1.1.1.002',
             de.MES,
-            ROUND((de.HORAS / NULLIF(h.TotalHoras,0)) * r.TotalRemuneracion,2),
+            -- Regla 2027 (2026-11-19): si el docente tiene horas de Gestión de Dirección en el mes,
+            -- el bono al cargo va 100% a la dirección (unidad transversal, la valoriza Desarrollo
+            -- Humano) y solo el resto de la remuneración se reparte por horas entre sus centros.
+            ROUND(CASE WHEN h.HorasDireccion > 0 THEN
+                           (de.HORAS / NULLIF(h.TotalHoras,0)) * (r.TotalRemuneracion - r.BonoCargo)
+                           + CASE WHEN LTRIM(RTRIM(ISNULL(de.CENTRO_COSTO,''))) = '0'
+                                    OR LTRIM(RTRIM(ISNULL(de.CONCEPTO,''))) COLLATE Latin1_General_CI_AI = N'Gestion de Direccion'
+                                  THEN (de.HORAS / h.HorasDireccion) * r.BonoCargo ELSE 0 END
+                       ELSE (de.HORAS / NULLIF(h.TotalHoras,0)) * r.TotalRemuneracion END, 2),
             de.HOJA_ORIGEN,
             de.ORIGEN,
             @Anio

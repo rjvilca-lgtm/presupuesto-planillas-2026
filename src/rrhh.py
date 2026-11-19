@@ -268,14 +268,32 @@ def _valorizacion_ddh(repo, usuario):
 
 # ------------------------------------------------------- horas docentes TC
 
+def _salarios_tc(repo) -> pd.DataFrame | None:
+    """Remuneración mensual total y bono al cargo por DNI, solo para calcular el
+    % Unidad transversal (no se muestran). Sin acceso a salarios: None."""
+    try:
+        sal = repo.remuneraciones()
+    except Exception:
+        st.warning("No se pudieron leer los salarios 2027: el % Unidad transversal queda "
+                   "igual al % Dirección (sin el ajuste del bono al cargo).", icon="⚠️")
+        return None
+    if sal.empty:
+        return None
+    comp = sal[COLS_REMUNERACION].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    return pd.DataFrame({"DNI": sal["DNI"].astype(str).str.strip(),
+                         "REMUNERACION": comp.sum(axis=1),
+                         "BONO_CARGO": comp["Bono_al_Cargo"]})
+
+
 def _horas_tc(repo, deptos):
     st.caption("Horas de los docentes TC 2027 según los planes de trabajo que guardaron "
                "los departamentos (horas cronológicas semanales, en decimal). Lo principal "
                "es la **Gestión de Dirección** (centro de costo 0), que la app no valoriza: "
                "la valoriza Desarrollo Humano. Son borradores: cambian cada vez que un "
-               "departamento guarda su plan. No incluye remuneraciones.")
+               "departamento guarda su plan. No muestra remuneraciones: solo el "
+               "**% Unidad transversal**, que incluye el bono al cargo completo.")
     tablas = reporte_tc.construir(repo.horas_tc(), repo.horas_docentes_todos(), deptos,
-                                  repo.todos_centros_costo())
+                                  repo.todos_centros_costo(), _salarios_tc(repo))
     res, direc = tablas["Resumen por docente"], tablas["Gestión de Dirección"]
     m = st.columns(4)
     m[0].metric("Docentes con plan", int((res["Plan guardado"] != "Sin plan").sum()),
@@ -298,7 +316,10 @@ def _horas_tc(repo, deptos):
     if direc.empty:
         st.info("Ningún plan TC guardado tiene horas de Gestión de Dirección.", icon="ℹ️")
     else:
-        st.caption("% Dirección = horas de Gestión de Dirección / horas del plan del semestre.")
+        st.caption("% Dirección = horas de Gestión de Dirección / horas del plan del semestre. "
+                   "**% Unidad transversal** = parte de la remuneración que se valoriza en la "
+                   "unidad transversal: el bono al cargo completo más el resto en proporción "
+                   "a las horas de dirección (sin bono al cargo, es igual al % Dirección).")
         st.dataframe(direc, hide_index=True, width="stretch", column_config=cfg)
     st.subheader("Por departamento")
     dep = tablas["Por departamento"]
