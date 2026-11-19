@@ -165,7 +165,7 @@ def revisar_pegado(filas, catalogo, direccion_defecto) -> pd.DataFrame:
     for codigo, desc, direccion in filas:
         direccion = direccion or ""
         if not CODIGO.fullmatch(codigo):
-            res = "Error: el código debe ser como 01.01.07.01.02"
+            res = "Error: el código debe ser como 01.01.08.01.02"
         elif codigo in vistos:
             res = "Error: código repetido en lo pegado"
         elif not desc:
@@ -198,7 +198,7 @@ def _actualizar(repo, catalogo, deptos, usuario):
                    "que ya existen se corrigen. Nunca se borran centros.")
         ver = st.session_state.get("_ver_cecos_pegar", 0)
         texto = st.text_area("Filas copiadas de Excel", key=f"cecos_pegar_{ver}", height=130,
-                             placeholder="01.01.07.01.06\tCENTRO NUEVO DE HUMANIDADES\t"
+                             placeholder="01.01.08.01.06\tCENTRO NUEVO DE HUMANIDADES\t"
                                          "FACULTAD DE HUMANIDADES, MATEMÁTICA Y CIENCIAS NATURALES")
         c1, c2 = st.columns(2)
         direccion_defecto = c1.selectbox(

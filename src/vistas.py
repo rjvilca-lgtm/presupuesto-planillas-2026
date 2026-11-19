@@ -369,7 +369,7 @@ def grilla(cfg: dict, ccos: pd.DataFrame, roster: pd.DataFrame,
 
 
 def formato_ceco(ccos: pd.DataFrame):
-    """'01.01.07.01.02 · INSTITUTO PARA EL MATRIMONIO…' para las listas."""
+    """'01.01.08.01.02 · INSTITUTO PARA EL MATRIMONIO…' para las listas."""
     desc = dict(zip(ccos["CODIGO_CECO"], ccos["DESCRIPCION_CECO"]))
     return lambda c: f"{c} · {desc[c]}" if desc.get(c) else str(c)
 
