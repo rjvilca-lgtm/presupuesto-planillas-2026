@@ -10,8 +10,9 @@ presupuestarlos, y agregarlos o corregirlos sin escribir SQL:
   - Verificar: lo que impide presupuestar o no cuadra.
   - Actualizar: pegar centros desde Excel, asignarlos a departamentos y
     agregarlos a la ficha TC.
-  - Focos: cambiar el nombre de un foco 2027 (FOCOS_NOMBRES_2027, requiere
-    sql/crear_nombres_focos_2027.sql).
+  - Focos: cambiar el foco de un centro (foco manual en
+    CLASIFICACION_CECOS_2027, requiere sql/crear_foco_por_centro_2027.sql) o
+    el nombre de un foco (FOCOS_NOMBRES_2027, sql/crear_nombres_focos_2027.sql).
   - Cambios: el registro de quién cambió qué (AUDITORIA_CECOS_2027).
 
 Escribir requiere sql/crear_gestion_cecos_2027.sql. Nunca borra centros del
@@ -79,21 +80,86 @@ def vista_cecos(repo, deptos: list[tuple], usuario):
         _consultar(catalogo)
 
 
+ORIGEN_FOCO = {"manual": "Manual", "heredada": "Heredado del centro antiguo",
+               "grupo": "De su grupo de centros"}
+
+
 def _focos(repo, usuario):
-    st.caption("Los focos agrupan los centros 2027 en los informes de Power BI. Aquí se cambia "
-               "el **nombre** que se ve: cambia en todas las páginas 2027 (no en 2026) y en "
-               "todos los centros de ese foco, también los que se agreguen después. Las cuentas "
-               "con acceso por foco pasan al nombre nuevo. Se ve en Power BI al actualizar el "
-               "modelo.")
+    st.caption("Los focos agrupan los centros 2027 en los informes de Power BI. Los cambios "
+               "valen solo para las páginas 2027 (no para 2026) y se ven en Power BI al "
+               "actualizar el modelo.")
     if not repo.focos_disponible():
-        st.warning("Para cambiar nombres de focos, ejecuta `sql/crear_nombres_focos_2027.sql` "
-                   "en Azure.", icon="⚠️")
+        st.warning("Para cambiar focos, ejecuta `sql/crear_nombres_focos_2027.sql` en Azure.",
+                   icon="⚠️")
         return
     try:
         focos = repo.focos_2027()
     except Exception as ex:
         st.warning(f"No se pudieron leer los focos ({type(ex).__name__}: {ex}).", icon="⚠️")
         return
+    with st.expander("📍 Cambiar el foco de un centro", expanded=True):
+        _foco_centro(repo, usuario, focos)
+    with st.expander("✏️ Cambiar el nombre de un foco (todos sus centros)"):
+        _nombre_foco(repo, usuario, focos)
+
+
+def _foco_centro(repo, usuario, focos):
+    if not repo.foco_centro_disponible():
+        st.warning("Para cambiar el foco de un centro, ejecuta "
+                   "`sql/crear_foco_por_centro_2027.sql` en Azure.", icon="⚠️")
+        return
+    centros = repo.focos_centros_2027()
+    info = centros.astype(object).where(centros.notna(), None).set_index("CENTRO_COSTO")
+    codigo = st.selectbox(
+        "Centro de costo", list(centros["CENTRO_COSTO"]), index=None,
+        placeholder="Escribe el código o el nombre", key="foco_centro",
+        format_func=lambda c: f"{c} · {info.loc[c, 'DESCRIPCION_CC']} · "
+                              f"{info.loc[c, 'FOCO'] or '(sin foco)'}")
+    if not codigo:
+        st.caption("El foco manual manda sobre el heredado. Los centros nuevos que no vienen "
+                   "de un centro antiguo toman el foco de su grupo.")
+        return
+    actual, origen = info.loc[codigo, "FOCO"], info.loc[codigo, "ORIGEN_FOCO"]
+    st.markdown(f"Foco actual: **{actual or '(sin foco)'}** · "
+                f"{ORIGEN_FOCO.get(origen, 'sin origen')}")
+    ver = st.session_state.get("_ver_foco_centro", 0)
+    opciones = [f for f in focos["FOCO"] if f != actual] + ["➕ Otro foco (escribir)"]
+    elegido = st.selectbox("Nuevo foco", opciones, index=None, placeholder="Elige el foco",
+                           key=f"foco_centro_nuevo_{ver}_{codigo}")
+    nuevo = elegido
+    if elegido == opciones[-1]:
+        nuevo = " ".join(st.text_input("Nombre del foco nuevo", max_chars=150,
+                                       key=f"foco_centro_texto_{ver}_{codigo}").split())
+        igual = next((f for f in focos["FOCO"] if f.casefold() == nuevo.casefold()), None)
+        if igual:
+            st.caption(f"Ya existe: se usará «{igual}».")
+            nuevo = igual
+    c1, c2 = st.columns(2)
+    if c1.button("Cambiar foco", type="primary", key="btn_foco_centro", width="stretch",
+                 disabled=not nuevo or nuevo == actual):
+        try:
+            repo.cambiar_foco_centro(codigo, nuevo, usuario.email)
+            st.session_state["_ver_foco_centro"] = ver + 1
+            _hecho(True, f"{codigo}: foco «{actual or '(sin foco)'}» → «{nuevo}». Actualiza el "
+                         "modelo de Power BI para verlo.")
+        except Exception as ex:
+            _hecho(False, f"No se cambió nada; se revirtió la operación. Detalle: {ex}")
+    if origen == "manual" and c2.button(
+            "Volver al foco heredado", key="btn_foco_centro_heredado", width="stretch",
+            help="Quita el foco manual: el centro vuelve a tomar el de su centro antiguo "
+                 "o el de su grupo."):
+        try:
+            repo.cambiar_foco_centro(codigo, None, usuario.email)
+            st.session_state["_ver_foco_centro"] = ver + 1
+            _hecho(True, f"{codigo}: vuelve al foco heredado. Actualiza el modelo de Power BI "
+                         "para verlo.")
+        except Exception as ex:
+            _hecho(False, f"No se cambió nada; se revirtió la operación. Detalle: {ex}")
+
+
+def _nombre_foco(repo, usuario, focos):
+    st.caption("Cambia el **nombre** que se ve de un foco en todos sus centros, también los "
+               "que se agreguen después. Las cuentas con acceso por foco pasan al nombre nuevo.")
     st.dataframe(focos, hide_index=True, width="stretch", column_config={
         "FOCO": st.column_config.TextColumn("Foco", width="large"),
         "CENTROS": st.column_config.NumberColumn("Centros 2027", format="%d"),

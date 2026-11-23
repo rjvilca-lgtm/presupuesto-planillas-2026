@@ -414,6 +414,23 @@ class RepositorioDemo:
         self._focos_demo[nuevo] = self._focos_demo.get(nuevo, 0) + n
         return {"cuentas": 0}
 
+    _foco_centros_demo: dict = {"01.01.04.01.01": ("FACULTAD DE COMPUTACION", "Facultad de Computación", "manual"),
+                                "01.01.04.06.01": ("GESTION ADMINISTRATIVA SPS FC", "Foco Pregrado", "heredada")}
+
+    def foco_centro_disponible(self) -> bool:
+        return True
+
+    def focos_centros_2027(self) -> pd.DataFrame:
+        return pd.DataFrame([(c, d, "FACULTAD DEMO", f, o)
+                             for c, (d, f, o) in sorted(self._foco_centros_demo.items())],
+                            columns=["CENTRO_COSTO", "DESCRIPCION_CC", "DIRECCION", "FOCO",
+                                     "ORIGEN_FOCO"])
+
+    def cambiar_foco_centro(self, codigo, foco, email) -> None:
+        d, f, _ = self._foco_centros_demo[codigo]
+        self._foco_centros_demo[codigo] = (d, foco or "Foco Pregrado",
+                                           "manual" if foco else "heredada")
+
     def permisos_usuario(self, email: str) -> pd.DataFrame:
         filas = [u for u in self._usuarios if u["EMAIL"] == email and u.get("ACTIVO", True)]
         return pd.DataFrame(filas, columns=["ROL", "DEPARTAMENTO"])
@@ -1624,6 +1641,53 @@ class RepositorioSQL:
                                f"«{anterior}» → «{nuevo}» ({cuentas} cuenta(s) con acceso)")
             return {"cuentas": cuentas}
         return self._en_transaccion_cecos(trabajo)
+
+    def foco_centro_disponible(self) -> bool:
+        """sql/crear_foco_por_centro_2027.sql: PROYECTO opcional y permiso de
+        escritura de la app en CLASIFICACION_CECOS_2027."""
+        df = self._leer_vivo(
+            "SELECT CAST(ISNULL((SELECT is_nullable FROM sys.columns WHERE object_id = "
+            "OBJECT_ID('dbo.CLASIFICACION_CECOS_2027') AND name = 'PROYECTO'), 0) AS int) "
+            "* ISNULL(HAS_PERMS_BY_NAME('dbo.CLASIFICACION_CECOS_2027', 'OBJECT', 'INSERT'), 0) "
+            "AS OK")
+        return bool(df["OK"].iloc[0])
+
+    def focos_centros_2027(self) -> pd.DataFrame:
+        """Foco de cada centro del catálogo 2027 y de dónde sale (manual,
+        heredado del centro antiguo o de su grupo)."""
+        return self._leer_vivo(
+            "SELECT c.CENTRO_COSTO, c.DESCRIPCION_CC, c.DIRECCION, p.FOCO, p.ORIGEN_FOCO "
+            "FROM CENTROS_COSTOS_2027 c LEFT JOIN vw_CENTROS_2027_PROYECTO p "
+            "ON p.CENTRO_COSTO = c.CENTRO_COSTO ORDER BY c.CENTRO_COSTO")
+
+    def cambiar_foco_centro(self, codigo: str, foco: str | None, email: str) -> None:
+        """Foco manual del centro (CLASIFICACION_CECOS_2027.FOCO). foco None:
+        vuelve al heredado (si la fila no tiene proyecto manual, se borra)."""
+        def trabajo(cur):
+            cur.execute("SELECT FOCO FROM vw_CENTROS_2027_PROYECTO WHERE CENTRO_COSTO = %s",
+                        [codigo])
+            fila = cur.fetchone()
+            antes = fila[0] if fila else None
+            if foco:
+                cur.execute("UPDATE CLASIFICACION_CECOS_2027 SET FOCO = %s "
+                            "WHERE CENTRO_COSTO = %s", [foco, codigo])
+                if not cur.rowcount:
+                    cur.execute("INSERT INTO CLASIFICACION_CECOS_2027 (CENTRO_COSTO, PROYECTO, "
+                                "COMENTARIO, FOCO) VALUES (%s, NULL, %s, %s)",
+                                [codigo, "Foco cambiado en la app", foco])
+            else:
+                cur.execute("UPDATE CLASIFICACION_CECOS_2027 SET FOCO = NULL "
+                            "WHERE CENTRO_COSTO = %s", [codigo])
+                cur.execute("DELETE FROM CLASIFICACION_CECOS_2027 WHERE CENTRO_COSTO = %s "
+                            "AND PROYECTO IS NULL AND FOCO IS NULL", [codigo])
+            cur.execute("SELECT FOCO FROM vw_CENTROS_2027_PROYECTO WHERE CENTRO_COSTO = %s",
+                        [codigo])
+            fila = cur.fetchone()
+            despues = fila[0] if fila else None
+            self._auditar_ceco(cur, email, "FOCO CENTRO",
+                               f"{codigo}: «{antes or '(sin foco)'}» → «{despues or '(sin foco)'}»"
+                               + ("" if foco else " (vuelve al heredado)"))
+        self._en_transaccion_cecos(trabajo)
 
     def permisos_usuario(self, email: str) -> pd.DataFrame:
         """Roles activos del correo (ver sql/crear_usuarios_planillas.sql).
