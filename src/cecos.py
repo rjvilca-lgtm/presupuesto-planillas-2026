@@ -155,6 +155,14 @@ def _foco_centro(repo, usuario, focos):
                          "para verlo.")
         except Exception as ex:
             _hecho(False, f"No se cambió nada; se revirtió la operación. Detalle: {ex}")
+    if actual:
+        n = int(dict(zip(focos["FOCO"], focos["CENTROS"])).get(actual, 0))
+        st.divider()
+        st.markdown(f"**✏️ Cambiar el nombre del foco «{actual}»**")
+        st.caption(f"Cambia en sus {n} centro(s) 2027, no solo en {codigo}, y en los que se "
+                   "agreguen después. Las cuentas con acceso por foco pasan al nombre nuevo. "
+                   "Para mover solo este centro, usa «Nuevo foco» arriba.")
+        _renombrar(repo, usuario, focos, actual, "foco_c")
 
 
 def _nombre_foco(repo, usuario, focos):
@@ -168,21 +176,29 @@ def _nombre_foco(repo, usuario, focos):
             help="Cuentas de Power BI que ven todos los centros de ese foco"),
         "ANTES": "Nombre original"})
 
-    lista = list(focos["FOCO"])
     c1, c2 = st.columns(2)
-    anterior = c1.selectbox("Foco", lista, index=None, placeholder="Elige un foco",
-                            key="foco_anterior")
+    anterior = c1.selectbox("Foco", list(focos["FOCO"]), index=None,
+                            placeholder="Elige un foco", key="foco_anterior")
+    _renombrar(repo, usuario, focos, anterior, "foco", c2)
+
+
+def _renombrar(repo, usuario, focos, anterior, clave, donde=None):
+    """Nombre nuevo para el foco «anterior» (todos sus centros). Si el nombre
+    ya existe, junta los dos focos con confirmación."""
+    lista = list(focos["FOCO"])
     ver = st.session_state.get("_ver_foco", 0)
-    nuevo = " ".join(c2.text_input("Nombre nuevo", key=f"foco_nuevo_{ver}_{anterior}",
-                                   value=anterior or "", max_chars=150).split())
+    nuevo = " ".join((donde or st).text_input(
+        "Nombre nuevo del foco", key=f"{clave}_nuevo_{ver}_{anterior}",
+        value=anterior or "", max_chars=150).split())
     juntar = next((f for f in lista if f.casefold() == nuevo.casefold() and f != anterior), None)
     confirma = True
     if anterior and juntar:
         centros = dict(zip(focos["FOCO"], focos["CENTROS"]))
         confirma = st.checkbox(f"«{juntar}» ya existe: los dos focos quedarán juntos, con "
-                               f"{int(centros[juntar] + centros[anterior])} centros. Confirmo "
-                               "que quiero juntarlos.", key=f"foco_juntar_{ver}")
-    if st.button("Cambiar nombre", type="primary", key="btn_foco",
+                               f"{int(centros.get(juntar, 0) + centros.get(anterior, 0))} "
+                               "centros. Confirmo que quiero juntarlos.",
+                               key=f"{clave}_juntar_{ver}")
+    if st.button("Cambiar nombre", type="primary", key=f"btn_{clave}",
                  disabled=not anterior or not nuevo or nuevo == anterior or not confirma):
         try:
             r = repo.renombrar_foco(anterior, juntar or nuevo, usuario.email)
