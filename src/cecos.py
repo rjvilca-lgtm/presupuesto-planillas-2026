@@ -13,6 +13,9 @@ presupuestarlos, y agregarlos o corregirlos sin escribir SQL:
   - Focos: cambiar el foco de un centro (foco manual en
     CLASIFICACION_CECOS_2027, requiere sql/crear_foco_por_centro_2027.sql) o
     el nombre de un foco (FOCOS_NOMBRES_2027, sql/crear_nombres_focos_2027.sql).
+  - Permisos Power BI: qué centros 2027 ve cada cuenta del informe; dar o
+    quitar acceso por foco (USUARIOS_FOCOS_2027) o por código
+    (USUARIOS_PREFIJOS_2027). Requiere sql/crear_permisos_powerbi_2027.sql.
   - Cambios: el registro de quién cambió qué (AUDITORIA_CECOS_2027).
 
 Escribir requiere sql/crear_gestion_cecos_2027.sql. Nunca borra centros del
@@ -55,10 +58,13 @@ def vista_cecos(repo, deptos: list[tuple], usuario):
         return
     puede_escribir = repo.gestion_cecos_disponible()
     parte = st.segmented_control(
-        "Sección", ["🔎 Consultar", "✅ Verificar", "✏️ Actualizar", "🎯 Focos", "🕘 Cambios"],
+        "Sección", ["🔎 Consultar", "✅ Verificar", "✏️ Actualizar", "🎯 Focos",
+                    "🔐 Permisos Power BI", "🕘 Cambios"],
         default="🔎 Consultar", key="cecos_parte", label_visibility="collapsed")
     if parte == "🎯 Focos":
         _focos(repo, usuario)
+    elif parte == "🔐 Permisos Power BI":
+        _permisos_bi(repo, usuario)
     elif parte == "✅ Verificar":
         _verificar(repo)
     elif parte == "✏️ Actualizar":
@@ -209,6 +215,142 @@ def _renombrar(repo, usuario, focos, anterior, clave, donde=None):
                          + ". Actualiza el modelo de Power BI para verlo.")
         except Exception as ex:
             _hecho(False, f"No se cambió nada; se revirtió la operación. Detalle: {ex}")
+
+
+CORREO = re.compile(r"[a-z0-9._%+-]+@ucsp\.edu\.pe")
+PREFIJO = re.compile(r"\d{2}(\.\d{2}){0,4}\.?")
+_OTRA_CUENTA = "➕ Otra cuenta (escribir)"
+
+
+def _permisos_bi(repo, usuario):
+    st.caption("Qué centros 2027 ve cada cuenta en las páginas 2027 del informe de Power BI. "
+               "Aquí se da o se quita acceso por **foco** (todos los centros de un foco) o por "
+               "**código** (todos los centros cuyo código empieza así; un código completo = un "
+               "centro). El acceso base por centro o departamento (tabla USUARIOS, también "
+               "2026) se ve pero no se cambia aquí. Los cambios se ven al actualizar el modelo.")
+    if not repo.permisos_bi_disponible():
+        st.warning("Para cambiar permisos, ejecuta `sql/crear_permisos_powerbi_2027.sql` en "
+                   "Azure.", icon="⚠️")
+        return
+    try:
+        cuentas = repo.cuentas_bi_2027()
+        centros = repo.focos_centros_2027()
+    except Exception as ex:
+        st.warning(f"No se pudieron leer los permisos ({type(ex).__name__}: {ex}).", icon="⚠️")
+        return
+    with st.expander(f"👥 Cuentas con acceso 2027 ({len(cuentas)})"):
+        st.dataframe(cuentas, hide_index=True, width="stretch", column_config={
+            "CORREO": "Cuenta",
+            "DEPTO": st.column_config.NumberColumn(
+                "Centros (rol Usuarios)", format="%d",
+                help="Centros 2027 que ve con el rol Usuarios del informe"),
+            "CENTRO": st.column_config.NumberColumn(
+                "Centros (rol Usuario_centro)", format="%d",
+                help="Centros 2027 que ve con el rol Usuario_centro (páginas de requerimientos)"),
+            "FOCOS": "Focos dados", "PREFIJOS": "Códigos dados"})
+
+    ver = st.session_state.get("_ver_bi", 0)
+    elegida = st.selectbox("Cuenta", list(cuentas["CORREO"]) + [_OTRA_CUENTA], index=None,
+                           placeholder="Escribe la cuenta", key="bi_cuenta")
+    correo = elegida
+    if elegida == _OTRA_CUENTA:
+        correo = st.text_input("Correo de la cuenta", key="bi_cuenta_texto",
+                               placeholder="cuenta-bi@ucsp.edu.pe").strip().lower()
+        if correo and not CORREO.fullmatch(correo):
+            st.error("Escribe un correo @ucsp.edu.pe.", icon="🛑")
+            return
+    if not correo:
+        return
+
+    p = repo.permisos_bi_cuenta(correo)
+    vistos = p["centros"]
+    c1, c2 = st.columns(2)
+    c1.metric("Centros 2027 · rol Usuarios", int(vistos["USUARIOS"].sum()) if len(vistos) else 0)
+    c2.metric("Centros 2027 · rol Usuario_centro",
+              int(vistos["USUARIO_CENTRO"].sum()) if len(vistos) else 0)
+    base = p["base"]
+    if len(base):
+        st.caption("Acceso base (USUARIOS, no se cambia aquí): " + "; ".join(
+            x for x in (base["CENTRO_COSTO"].dropna().tolist()
+                        + base["DEPARTAMENTO"].dropna().tolist())))
+    else:
+        st.caption("Sin acceso base en USUARIOS: en el servicio de Power BI agrega la cuenta al "
+                   "rol Usuarios o Usuario_centro (con foco o código vale cualquiera de los dos).")
+
+    for tipo, df, col, nombre in (("FOCO", p["focos"], "FOCO", "Foco"),
+                                  ("PREFIJO", p["prefijos"], "PREFIJO", "Código")):
+        for i, valor in enumerate(df[col]):
+            extra = ""
+            if tipo == "PREFIJO":
+                n = int(centros["CENTRO_COSTO"].str.startswith(valor).sum())
+                motivo = df["MOTIVO"].iloc[i]
+                extra = f" · {n} centro(s)" + (f" · {motivo}" if pd.notna(motivo) and motivo
+                                               else "")
+            else:
+                extra = f" · {int((centros['FOCO'] == valor).sum())} centro(s)"
+            a, b = st.columns([4, 1], vertical_alignment="center")
+            a.markdown(f"{nombre}: **{valor}**{extra}")
+            if b.button("Quitar", key=f"bi_quitar_{tipo}_{i}", width="stretch"):
+                try:
+                    repo.quitar_permiso_bi(correo, tipo, valor, usuario.email)
+                    _hecho(True, f"{correo}: se quitó el {nombre.lower()} «{valor}». Actualiza "
+                                 "el modelo de Power BI para verlo.")
+                except Exception as ex:
+                    _hecho(False, f"No se cambió nada; se revirtió la operación. Detalle: {ex}")
+
+    st.divider()
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**🎯 Dar un foco**")
+        dados = set(p["focos"]["FOCO"])
+        lista = sorted(f for f in centros["FOCO"].dropna().unique() if f not in dados)
+        foco = st.selectbox("Foco", lista, index=None, placeholder="Elige el foco",
+                            key=f"bi_foco_{ver}_{correo}")
+        if foco:
+            st.caption(f"Verá sus {int((centros['FOCO'] == foco).sum())} centro(s) 2027 y los "
+                       "que tengan ese foco después.")
+        if st.button("Dar foco", type="primary", key="btn_bi_foco", disabled=not foco,
+                     width="stretch"):
+            _dar_bi(repo, usuario, correo, "FOCO", foco, None, ver)
+    with c2:
+        st.markdown("**🔢 Dar centros por código**")
+        texto = "".join(st.text_input("Código o inicio del código", max_chars=20,
+                                      key=f"bi_prefijo_{ver}_{correo}",
+                                      placeholder="01.01.04. o 01.01.04.06.01").split())
+        prefijo, n = None, 0
+        if texto:
+            if not PREFIJO.fullmatch(texto):
+                st.error("Usa el formato de los códigos: 01, 01.01, … 01.01.04.06.01.", icon="🛑")
+            else:
+                base_cod = texto.rstrip(".")   # código completo: un solo centro
+                prefijo = base_cod if len(base_cod) == 14 else base_cod + "."
+                n =int(centros["CENTRO_COSTO"].str.startswith(prefijo).sum())
+                st.caption(f"`{prefijo}` → {n} centro(s) 2027 hoy"
+                           + (" y los que se creen después con ese inicio."
+                              if n and prefijo.endswith(".") else "."))
+        motivo = " ".join(st.text_input("Motivo (opcional)", max_chars=200,
+                                        key=f"bi_motivo_{ver}_{correo}").split())
+        if st.button("Dar centros", type="primary", key="btn_bi_prefijo",
+                     disabled=not prefijo or not n, width="stretch"):
+            _dar_bi(repo, usuario, correo, "PREFIJO", prefijo, motivo or None, ver)
+
+    with st.expander(f"📋 Centros 2027 que ve ({len(vistos)})"):
+        st.dataframe(vistos, hide_index=True, width="stretch", column_config={
+            "CENTRO_COSTO": "Centro", "DESCRIPCION_CC": "Descripción", "FOCO": "Foco",
+            "USUARIOS": st.column_config.CheckboxColumn("Rol Usuarios"),
+            "USUARIO_CENTRO": st.column_config.CheckboxColumn("Rol Usuario_centro")})
+
+
+def _dar_bi(repo, usuario, correo, tipo, valor, motivo, ver):
+    nombre = {"FOCO": "el foco", "PREFIJO": "los centros"}[tipo]
+    try:
+        n = repo.dar_permiso_bi(correo, tipo, valor, usuario.email, motivo)
+        st.session_state["_ver_bi"] = ver + 1
+        _hecho(True, f"{correo}: ya tenía {nombre} «{valor}»." if not n else
+                     f"{correo}: ahora ve {nombre} «{valor}». Actualiza el modelo de Power BI "
+                     "para verlo.")
+    except Exception as ex:
+        _hecho(False, f"No se cambió nada; se revirtió la operación. Detalle: {ex}")
 
 
 def _direcciones(catalogo) -> list[str]:

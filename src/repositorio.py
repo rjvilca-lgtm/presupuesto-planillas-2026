@@ -431,6 +431,61 @@ class RepositorioDemo:
         self._foco_centros_demo[codigo] = (d, foco or "Foco Pregrado",
                                            "manual" if foco else "heredada")
 
+    _permisos_bi_demo: dict = {"focos": {("dsps-bi@ucsp.edu.pe", "Foco Pregrado")},
+                               "prefijos": {("focos-aci-bi@ucsp.edu.pe", "01.01.04."):
+                                            "Facultad de Computación"}}
+
+    def permisos_bi_disponible(self) -> bool:
+        return True
+
+    def _centros_bi_demo(self, correo) -> list[str]:
+        d = self._permisos_bi_demo
+        focos = {f for c, f in d["focos"] if c == correo}
+        pref = [p for c, p in d["prefijos"] if c == correo]
+        return sorted(c for c, (_, f, _) in self._foco_centros_demo.items()
+                      if f in focos or any(c.startswith(p) for p in pref))
+
+    def cuentas_bi_2027(self) -> pd.DataFrame:
+        d = self._permisos_bi_demo
+        correos = sorted({c for c, _ in d["focos"]} | {c for c, _ in d["prefijos"]})
+        return pd.DataFrame(
+            [(c, 0, len(self._centros_bi_demo(c)),
+              " · ".join(sorted(f for x, f in d["focos"] if x == c)) or None,
+              " · ".join(sorted(p for x, p in d["prefijos"] if x == c)) or None)
+             for c in correos], columns=["CORREO", "DEPTO", "CENTRO", "FOCOS", "PREFIJOS"])
+
+    def permisos_bi_cuenta(self, correo: str) -> dict:
+        correo, d = correo.strip().lower(), self._permisos_bi_demo
+        centros = pd.DataFrame(
+            [(c, self._foco_centros_demo[c][0], self._foco_centros_demo[c][1], 1, 1)
+             for c in self._centros_bi_demo(correo)],
+            columns=["CENTRO_COSTO", "DESCRIPCION_CC", "FOCO", "USUARIOS", "USUARIO_CENTRO"])
+        return {"centros": centros,
+                "base": pd.DataFrame(columns=["CENTRO_COSTO", "DEPARTAMENTO"]),
+                "focos": pd.DataFrame(sorted(f for c, f in d["focos"] if c == correo),
+                                      columns=["FOCO"]),
+                "prefijos": pd.DataFrame(sorted((p, m) for (c, p), m in d["prefijos"].items()
+                                                if c == correo), columns=["PREFIJO", "MOTIVO"])}
+
+    def dar_permiso_bi(self, correo, tipo, valor, email, motivo=None) -> int:
+        correo, d = correo.strip().lower(), self._permisos_bi_demo
+        if tipo == "FOCO":
+            n = (correo, valor) not in d["focos"]
+            d["focos"].add((correo, valor))
+        else:
+            n = (correo, valor) not in d["prefijos"]
+            d["prefijos"].setdefault((correo, valor), motivo)
+        return int(n)
+
+    def quitar_permiso_bi(self, correo, tipo, valor, email) -> int:
+        correo, d = correo.strip().lower(), self._permisos_bi_demo
+        if tipo == "FOCO":
+            n = (correo, valor) in d["focos"]
+            d["focos"].discard((correo, valor))
+        else:
+            n = d["prefijos"].pop((correo, valor), False) is not False
+        return int(n)
+
     def permisos_usuario(self, email: str) -> pd.DataFrame:
         filas = [u for u in self._usuarios if u["EMAIL"] == email and u.get("ACTIVO", True)]
         return pd.DataFrame(filas, columns=["ROL", "DEPARTAMENTO"])
@@ -464,6 +519,10 @@ class RepositorioDemo:
 # Se corre pytds.connect() en un hilo aparte para poder darle un límite
 # duro, e imprime cada paso a stdout para que quede en los logs de Cloud.
 TIMEOUT_CONEXION = 15
+
+# Permisos de Power BI 2027 que la app puede dar o quitar: tipo → (tabla, columna).
+_TABLA_PERMISO_BI = {"FOCO": ("USUARIOS_FOCOS_2027", "FOCO"),
+                     "PREFIJO": ("USUARIOS_PREFIJOS_2027", "PREFIJO")}
 
 
 def _cifrada(conn) -> bool:
@@ -1688,6 +1747,102 @@ class RepositorioSQL:
                                f"{codigo}: «{antes or '(sin foco)'}» → «{despues or '(sin foco)'}»"
                                + ("" if foco else " (vuelve al heredado)"))
         self._en_transaccion_cecos(trabajo)
+
+    # ------------------------------------------- Permisos de Power BI 2027
+    # sql/crear_permisos_powerbi_2027.sql. Lo que ve cada cuenta sale de
+    # vw_USUARIOS_CECOS_2027: USUARIOS (solo se lee) + focos + prefijos.
+
+    def permisos_bi_disponible(self) -> bool:
+        df = self._leer_vivo(
+            "SELECT ISNULL(HAS_PERMS_BY_NAME('dbo.USUARIOS_FOCOS_2027', 'OBJECT', 'INSERT'), 0) "
+            "* ISNULL(HAS_PERMS_BY_NAME('dbo.USUARIOS_PREFIJOS_2027', 'OBJECT', 'INSERT'), 0) "
+            "* ISNULL(HAS_PERMS_BY_NAME('dbo.vw_USUARIOS_CECOS_2027', 'OBJECT', 'SELECT'), 0) "
+            "* ISNULL(HAS_PERMS_BY_NAME('dbo.USUARIOS', 'OBJECT', 'SELECT'), 0) AS OK")
+        return bool(df["OK"].iloc[0])
+
+    def cuentas_bi_2027(self) -> pd.DataFrame:
+        """Una fila por cuenta: centros 2027 que ve con cada rol de Power BI,
+        focos y prefijos dados."""
+        return self._leer_vivo(
+            "WITH v AS (SELECT CORREO_ELECTRONICO AS CORREO, "
+            " COUNT(DISTINCT CASE WHEN TIPO = 'DEPARTAMENTO' THEN CENTRO_COSTO_2027 END) AS DEPTO, "
+            " COUNT(DISTINCT CASE WHEN TIPO = 'CENTRO' THEN CENTRO_COSTO_2027 END) AS CENTRO "
+            " FROM vw_USUARIOS_CECOS_2027 GROUP BY CORREO_ELECTRONICO), "
+            "f AS (SELECT LOWER(LTRIM(RTRIM(CORREO_ELECTRONICO))) AS CORREO, "
+            " STRING_AGG(FOCO, ' · ') WITHIN GROUP (ORDER BY FOCO) AS FOCOS "
+            " FROM USUARIOS_FOCOS_2027 GROUP BY LOWER(LTRIM(RTRIM(CORREO_ELECTRONICO)))), "
+            "p AS (SELECT LOWER(LTRIM(RTRIM(CORREO_ELECTRONICO))) AS CORREO, "
+            " STRING_AGG(PREFIJO, ' · ') WITHIN GROUP (ORDER BY PREFIJO) AS PREFIJOS "
+            " FROM USUARIOS_PREFIJOS_2027 GROUP BY LOWER(LTRIM(RTRIM(CORREO_ELECTRONICO)))), "
+            "c AS (SELECT CORREO FROM v UNION SELECT CORREO FROM f UNION SELECT CORREO FROM p) "
+            "SELECT c.CORREO, ISNULL(v.DEPTO, 0) AS DEPTO, ISNULL(v.CENTRO, 0) AS CENTRO, "
+            "f.FOCOS, p.PREFIJOS FROM c LEFT JOIN v ON v.CORREO = c.CORREO "
+            "LEFT JOIN f ON f.CORREO = c.CORREO LEFT JOIN p ON p.CORREO = c.CORREO "
+            "ORDER BY c.CORREO")
+
+    def permisos_bi_cuenta(self, correo: str) -> dict:
+        """Lo que ve una cuenta: centros 2027 (con qué rol), su acceso base en
+        USUARIOS (solo lectura), focos y prefijos."""
+        correo = correo.strip().lower()
+        centros = self._leer_vivo(
+            "SELECT v.CENTRO_COSTO_2027 AS CENTRO_COSTO, cc.DESCRIPCION_CC, p.FOCO, "
+            "MAX(CASE WHEN v.TIPO = 'DEPARTAMENTO' THEN 1 ELSE 0 END) AS USUARIOS, "
+            "MAX(CASE WHEN v.TIPO = 'CENTRO' THEN 1 ELSE 0 END) AS USUARIO_CENTRO "
+            "FROM vw_USUARIOS_CECOS_2027 v "
+            "LEFT JOIN CENTROS_COSTOS_2027 cc ON cc.CENTRO_COSTO = v.CENTRO_COSTO_2027 "
+            "LEFT JOIN vw_CENTROS_2027_PROYECTO p ON p.CENTRO_COSTO = v.CENTRO_COSTO_2027 "
+            "WHERE v.CORREO_ELECTRONICO = %s "
+            "GROUP BY v.CENTRO_COSTO_2027, cc.DESCRIPCION_CC, p.FOCO ORDER BY v.CENTRO_COSTO_2027",
+            (correo,))
+        base = self._leer_vivo(
+            "SELECT NULLIF(LTRIM(RTRIM(CENTRO_COSTO)), '') AS CENTRO_COSTO, "
+            "NULLIF(LTRIM(RTRIM(DESCRIPCION)), '') AS DEPARTAMENTO FROM USUARIOS "
+            "WHERE LOWER(LTRIM(RTRIM(CORREO_ELECTRONICO))) = %s ORDER BY 1, 2", (correo,))
+        focos = self._leer_vivo(
+            "SELECT FOCO FROM USUARIOS_FOCOS_2027 "
+            "WHERE LOWER(LTRIM(RTRIM(CORREO_ELECTRONICO))) = %s ORDER BY FOCO", (correo,))
+        prefijos = self._leer_vivo(
+            "SELECT PREFIJO, MOTIVO FROM USUARIOS_PREFIJOS_2027 "
+            "WHERE LOWER(LTRIM(RTRIM(CORREO_ELECTRONICO))) = %s ORDER BY PREFIJO", (correo,))
+        return {"centros": centros, "base": base, "focos": focos, "prefijos": prefijos}
+
+    def dar_permiso_bi(self, correo: str, tipo: str, valor: str, email: str,
+                       motivo: str | None = None) -> int:
+        """tipo FOCO (USUARIOS_FOCOS_2027) o PREFIJO (USUARIOS_PREFIJOS_2027).
+        Devuelve 0 si la cuenta ya lo tenía."""
+        correo = correo.strip().lower()
+        tabla, col = _TABLA_PERMISO_BI[tipo]
+
+        def trabajo(cur):
+            cur.execute(f"SELECT COUNT(*) FROM {tabla} WHERE LOWER(LTRIM(RTRIM("
+                        f"CORREO_ELECTRONICO))) = %s AND {col} = %s", [correo, valor])
+            if cur.fetchone()[0]:
+                return 0
+            if tipo == "PREFIJO":
+                cur.execute(f"INSERT INTO {tabla} (CORREO_ELECTRONICO, {col}, MOTIVO) "
+                            "VALUES (%s, %s, %s)", [correo, valor, motivo or None])
+            else:
+                cur.execute(f"INSERT INTO {tabla} (CORREO_ELECTRONICO, {col}) VALUES (%s, %s)",
+                            [correo, valor])
+            self._auditar_ceco(cur, email, "PERMISO BI",
+                               f"{correo}: + {tipo.lower()} «{valor}»"
+                               + (f" ({motivo})" if motivo else ""))
+            return 1
+        return self._en_transaccion_cecos(trabajo)
+
+    def quitar_permiso_bi(self, correo: str, tipo: str, valor: str, email: str) -> int:
+        correo = correo.strip().lower()
+        tabla, col = _TABLA_PERMISO_BI[tipo]
+
+        def trabajo(cur):
+            cur.execute(f"DELETE FROM {tabla} WHERE LOWER(LTRIM(RTRIM(CORREO_ELECTRONICO))) = %s "
+                        f"AND {col} = %s", [correo, valor])
+            n = cur.rowcount
+            if n:
+                self._auditar_ceco(cur, email, "PERMISO BI",
+                                   f"{correo}: − {tipo.lower()} «{valor}»")
+            return n
+        return self._en_transaccion_cecos(trabajo)
 
     def permisos_usuario(self, email: str) -> pd.DataFrame:
         """Roles activos del correo (ver sql/crear_usuarios_planillas.sql).
