@@ -10,6 +10,8 @@ presupuestarlos, y agregarlos o corregirlos sin escribir SQL:
   - Verificar: lo que impide presupuestar o no cuadra.
   - Actualizar: pegar centros desde Excel, asignarlos a departamentos y
     agregarlos a la ficha TC.
+  - Focos: cambiar el nombre de un foco 2027 (FOCOS_NOMBRES_2027, requiere
+    sql/crear_nombres_focos_2027.sql).
   - Cambios: el registro de quién cambió qué (AUDITORIA_CECOS_2027).
 
 Escribir requiere sql/crear_gestion_cecos_2027.sql. Nunca borra centros del
@@ -52,9 +54,11 @@ def vista_cecos(repo, deptos: list[tuple], usuario):
         return
     puede_escribir = repo.gestion_cecos_disponible()
     parte = st.segmented_control(
-        "Sección", ["🔎 Consultar", "✅ Verificar", "✏️ Actualizar", "🕘 Cambios"],
+        "Sección", ["🔎 Consultar", "✅ Verificar", "✏️ Actualizar", "🎯 Focos", "🕘 Cambios"],
         default="🔎 Consultar", key="cecos_parte", label_visibility="collapsed")
-    if parte == "✅ Verificar":
+    if parte == "🎯 Focos":
+        _focos(repo, usuario)
+    elif parte == "✅ Verificar":
         _verificar(repo)
     elif parte == "✏️ Actualizar":
         if not puede_escribir:
@@ -73,6 +77,56 @@ def vista_cecos(repo, deptos: list[tuple], usuario):
                     "`sql/crear_gestion_cecos_2027.sql`.", icon="ℹ️")
     else:
         _consultar(catalogo)
+
+
+def _focos(repo, usuario):
+    st.caption("Los focos agrupan los centros 2027 en los informes de Power BI. Aquí se cambia "
+               "el **nombre** que se ve: cambia en todas las páginas 2027 (no en 2026) y en "
+               "todos los centros de ese foco, también los que se agreguen después. Las cuentas "
+               "con acceso por foco pasan al nombre nuevo. Se ve en Power BI al actualizar el "
+               "modelo.")
+    if not repo.focos_disponible():
+        st.warning("Para cambiar nombres de focos, ejecuta `sql/crear_nombres_focos_2027.sql` "
+                   "en Azure.", icon="⚠️")
+        return
+    try:
+        focos = repo.focos_2027()
+    except Exception as ex:
+        st.warning(f"No se pudieron leer los focos ({type(ex).__name__}: {ex}).", icon="⚠️")
+        return
+    st.dataframe(focos, hide_index=True, width="stretch", column_config={
+        "FOCO": st.column_config.TextColumn("Foco", width="large"),
+        "CENTROS": st.column_config.NumberColumn("Centros 2027", format="%d"),
+        "CUENTAS": st.column_config.NumberColumn(
+            "Cuentas con acceso por foco", format="%d",
+            help="Cuentas de Power BI que ven todos los centros de ese foco"),
+        "ANTES": "Nombre original"})
+
+    lista = list(focos["FOCO"])
+    c1, c2 = st.columns(2)
+    anterior = c1.selectbox("Foco", lista, index=None, placeholder="Elige un foco",
+                            key="foco_anterior")
+    ver = st.session_state.get("_ver_foco", 0)
+    nuevo = " ".join(c2.text_input("Nombre nuevo", key=f"foco_nuevo_{ver}_{anterior}",
+                                   value=anterior or "", max_chars=150).split())
+    juntar = next((f for f in lista if f.casefold() == nuevo.casefold() and f != anterior), None)
+    confirma = True
+    if anterior and juntar:
+        centros = dict(zip(focos["FOCO"], focos["CENTROS"]))
+        confirma = st.checkbox(f"«{juntar}» ya existe: los dos focos quedarán juntos, con "
+                               f"{int(centros[juntar] + centros[anterior])} centros. Confirmo "
+                               "que quiero juntarlos.", key=f"foco_juntar_{ver}")
+    if st.button("Cambiar nombre", type="primary", key="btn_foco",
+                 disabled=not anterior or not nuevo or nuevo == anterior or not confirma):
+        try:
+            r = repo.renombrar_foco(anterior, juntar or nuevo, usuario.email)
+            st.session_state["_ver_foco"] = ver + 1
+            _hecho(True, f"«{anterior}» ahora se llama «{juntar or nuevo}»"
+                         + (f"; {r['cuentas']} cuenta(s) con acceso por foco pasaron al nombre "
+                            "nuevo" if r["cuentas"] else "")
+                         + ". Actualiza el modelo de Power BI para verlo.")
+        except Exception as ex:
+            _hecho(False, f"No se cambió nada; se revirtió la operación. Detalle: {ex}")
 
 
 def _direcciones(catalogo) -> list[str]:

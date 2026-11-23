@@ -399,6 +399,21 @@ class RepositorioDemo:
     def auditoria_cecos(self) -> pd.DataFrame:
         return pd.DataFrame(self._auditoria_cecos, columns=["FECHA", "EMAIL", "ACCION", "DETALLE"])
 
+    _focos_demo: dict = {"Foco Pregrado": 26, "Foco Investigación (Departamentos)": 107,
+                         "Facultad de Computación": 2}
+
+    def focos_disponible(self) -> bool:
+        return True
+
+    def focos_2027(self) -> pd.DataFrame:
+        return pd.DataFrame([(f, n, 0, None) for f, n in sorted(self._focos_demo.items())],
+                            columns=["FOCO", "CENTROS", "CUENTAS", "ANTES"])
+
+    def renombrar_foco(self, anterior, nuevo, email) -> dict:
+        n = self._focos_demo.pop(anterior, 0)
+        self._focos_demo[nuevo] = self._focos_demo.get(nuevo, 0) + n
+        return {"cuentas": 0}
+
     def permisos_usuario(self, email: str) -> pd.DataFrame:
         filas = [u for u in self._usuarios if u["EMAIL"] == email and u.get("ACTIVO", True)]
         return pd.DataFrame(filas, columns=["ROL", "DEPARTAMENTO"])
@@ -1549,6 +1564,66 @@ class RepositorioSQL:
     def auditoria_cecos(self) -> pd.DataFrame:
         return self._leer_vivo("SELECT TOP 200 FECHA, EMAIL, ACCION, DETALLE "
                                "FROM AUDITORIA_CECOS_2027 ORDER BY ID DESC")
+
+    # ------------------------------------------- Nombres de los focos 2027
+    # sql/crear_nombres_focos_2027.sql: FOCOS_NOMBRES_2027 (nombre original →
+    # nombre nuevo) que aplica vw_CENTROS_2027_PROYECTO. No toca 2026.
+
+    def focos_disponible(self) -> bool:
+        df = self._leer_vivo("SELECT OBJECT_ID('dbo.FOCOS_NOMBRES_2027', 'U') AS ID")
+        return df["ID"].iloc[0] is not None
+
+    def focos_2027(self) -> pd.DataFrame:
+        """Focos de los centros del catálogo 2027: centros, cuentas con acceso
+        por foco y nombres anteriores."""
+        return self._leer_vivo(
+            "SELECT p.FOCO, COUNT(*) AS CENTROS, "
+            "(SELECT COUNT(*) FROM USUARIOS_FOCOS_2027 u WHERE u.FOCO = p.FOCO) AS CUENTAS, "
+            "(SELECT STRING_AGG(n.FOCO_ORIGINAL, ' · ') FROM FOCOS_NOMBRES_2027 n "
+            " WHERE n.FOCO_NOMBRE = p.FOCO) AS ANTES "
+            "FROM vw_CENTROS_2027_PROYECTO p "
+            "WHERE p.FOCO IS NOT NULL AND EXISTS (SELECT 1 FROM CENTROS_COSTOS_2027 c "
+            " WHERE c.CENTRO_COSTO = p.CENTRO_COSTO) "
+            "GROUP BY p.FOCO ORDER BY p.FOCO")
+
+    def renombrar_foco(self, anterior: str, nuevo: str, email: str) -> dict:
+        """Cambia el nombre que se ve de un foco 2027. Todos los nombres
+        originales que hoy se ven como «anterior» pasan a verse como «nuevo»; si
+        «nuevo» ya existe, los dos focos quedan juntos. Las cuentas con acceso
+        por ese foco (USUARIOS_FOCOS_2027) pasan al nombre nuevo. Todo o nada."""
+        def trabajo(cur):
+            cur.execute("SELECT FOCO_ORIGINAL FROM FOCOS_NOMBRES_2027 WHERE FOCO_NOMBRE = %s",
+                        [anterior])
+            originales = [r[0] for r in cur.fetchall()]
+            cur.execute("SELECT COUNT(*) FROM FOCOS_NOMBRES_2027 WHERE FOCO_ORIGINAL = %s",
+                        [anterior])
+            if not cur.fetchone()[0]:
+                originales.append(anterior)   # se ve con su nombre original
+            for original in originales:
+                if original == nuevo:          # vuelve a su nombre original
+                    cur.execute("DELETE FROM FOCOS_NOMBRES_2027 WHERE FOCO_ORIGINAL = %s",
+                                [original])
+                    continue
+                cur.execute("UPDATE FOCOS_NOMBRES_2027 SET FOCO_NOMBRE = %s "
+                            "WHERE FOCO_ORIGINAL = %s", [nuevo, original])
+                if not cur.rowcount:
+                    cur.execute("INSERT INTO FOCOS_NOMBRES_2027 (FOCO_ORIGINAL, FOCO_NOMBRE) "
+                                "VALUES (%s, %s)", [original, nuevo])
+            # Cuentas: pasan al nombre nuevo; si ya lo tenían, sobra la fila vieja.
+            # (La comparación no distingue mayúsculas: cambiar solo mayúsculas
+            # actualiza la fila y no la borra.)
+            cur.execute("UPDATE u SET FOCO = %s FROM USUARIOS_FOCOS_2027 u WHERE u.FOCO = %s "
+                        "AND NOT EXISTS (SELECT 1 FROM USUARIOS_FOCOS_2027 x WHERE "
+                        "x.CORREO_ELECTRONICO = u.CORREO_ELECTRONICO AND x.FOCO = %s "
+                        "AND x.FOCO <> %s)", [nuevo, anterior, nuevo, anterior])
+            cuentas = cur.rowcount
+            cur.execute("DELETE FROM USUARIOS_FOCOS_2027 WHERE FOCO = %s AND FOCO <> %s",
+                        [anterior, nuevo])
+            cuentas += cur.rowcount
+            self._auditar_ceco(cur, email, "FOCO NOMBRE",
+                               f"«{anterior}» → «{nuevo}» ({cuentas} cuenta(s) con acceso)")
+            return {"cuentas": cuentas}
+        return self._en_transaccion_cecos(trabajo)
 
     def permisos_usuario(self, email: str) -> pd.DataFrame:
         """Roles activos del correo (ver sql/crear_usuarios_planillas.sql).
