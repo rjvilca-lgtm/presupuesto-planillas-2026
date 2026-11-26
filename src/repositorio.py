@@ -177,6 +177,9 @@ class RepositorioDemo:
         for hoja, tipo, _, despues in cambios:
             _TARIFAS_DEMO[hoja][tipo] = float(despues)
 
+    def agregar_tarifa(self, hoja: str, tipo: str, tarifa: float, email: str):
+        _TARIFAS_DEMO.setdefault(hoja, {})[tipo] = float(tarifa)
+
     def roster(self, origen: str) -> pd.DataFrame:
         filas = _ROSTER_DEMO.get(origen, [])
         return pd.DataFrame(filas, columns=["DNI", "NOMBRE"]).assign(HORAS_META=40.0)
@@ -1179,6 +1182,22 @@ class RepositorioSQL:
         if sps_por_tarifa(cambios):
             self.limpiar_cache_trabajo()
             _leer_valorizado.clear()
+
+    def agregar_tarifa(self, hoja: str, tipo: str, tarifa: float, email: str):
+        """Alta de un tipo de tarifa (sql/permiso_agregar_tarifas.sql). Falla si
+        ya existe ese tipo en la planilla (sin distinguir mayúsculas)."""
+        def trabajo(cur):
+            cur.execute("SELECT COUNT(*) FROM tarifas_2027 WITH (UPDLOCK, HOLDLOCK) "
+                        "WHERE HOJA_ORIGEN = %s AND UPPER(LTRIM(RTRIM(TIPO))) = UPPER(%s)",
+                        [hoja, tipo])
+            if cur.fetchone()[0]:
+                raise ValueError(f"«{tipo}» ya existe en {hoja}.")
+            cur.execute("INSERT INTO tarifas_2027 (HOJA_ORIGEN, TIPO, TARIFA) VALUES (%s, %s, %s)",
+                        [hoja, tipo, tarifa])
+            self._auditar(cur, email, "tarifas_2027", "ALTA",
+                          detalle=f"{tipo} ({hoja}): {tarifa}")
+        self._transaccion(self._conn(), trabajo)
+        self.limpiar_cache()   # las grillas leen las tarifas con caché larga
 
     @contextmanager
     def _conn_rrhh(self):

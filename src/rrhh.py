@@ -348,6 +348,7 @@ def _tarifas(repo, usuario):
                                                              min_value=0.01, format="%.2f",
                                                              required=True)},
                     "Guardar tarifas por hora")
+    _agregar_tarifa(repo, usuario, todas, "horas")
 
     st.divider()
     st.markdown("**Costo mensual de los puestos nuevos**")
@@ -369,6 +370,66 @@ def _tarifas(repo, usuario):
                                                              min_value=0.01, format="%,.2f",
                                                              required=True)},
                     "Guardar costos de puestos", orden=["TIPO", "TARIFA"])
+    _agregar_tarifa(repo, usuario, todas, "puestos")
+
+
+# Planillas en las que un tipo nuevo sirve: aparece como opción en la grilla y
+# cada fila guarda su tarifa. Carga académica (Titular, Jefe de práctica y
+# Asistente fijos en el sp) y Prácticas (una sola tarifa) no admiten tipos nuevos.
+AGREGABLES = {"Horas Adicionales": "Horas adicionales", "Ayudantias": "Ayudantías"}
+LARGO_TIPO = 50   # tarifas_2027.TIPO es varchar(50)
+
+
+def _agregar_tarifa(repo, usuario, todas, nombre):
+    from .config import PUESTOS_NUEVOS
+    puestos = nombre == "puestos"
+    with st.expander("➕ Agregar puesto" if puestos else "➕ Agregar tarifa por hora"):
+        with st.form(f"form_tarifa_{nombre}", clear_on_submit=True, border=False):
+            if puestos:
+                st.caption("El puesto aparece de inmediato en la lista de los departamentos y "
+                           "áreas que registran puestos nuevos. UPGRADE es un ascenso: su "
+                           "costo es solo la diferencia con el puesto anterior, más cargas.")
+                c1, c2, c3 = st.columns([1, 3, 1.4], vertical_alignment="bottom")
+                clase = c1.selectbox("Clase", ["NUEVO", "UPGRADE"])
+                texto = c2.text_input("Puesto", placeholder="ANALISTA o ASISTENTE A ANALISTA",
+                                      help="En un UPGRADE: «PUESTO ANTERIOR A PUESTO NUEVO».")
+                valor = c3.number_input("Costo mensual (S/)", min_value=0.0, step=100.0,
+                                        format="%.2f")
+                hoja = PUESTOS_NUEVOS
+            else:
+                st.caption("El tipo nuevo aparece de inmediato como opción en la planilla "
+                           "elegida. Solo Horas adicionales y Ayudantías admiten tipos nuevos: "
+                           "la Carga académica usa siempre Titular, Jefe de practica y "
+                           "Asistente, y las Prácticas una sola tarifa.")
+                c1, c2, c3 = st.columns([1.3, 3, 1.4], vertical_alignment="bottom")
+                hoja = c1.selectbox("Planilla", list(AGREGABLES), format_func=AGREGABLES.get)
+                texto = c2.text_input("Tipo", max_chars=LARGO_TIPO,
+                                      placeholder="Por ejemplo: Docente invitado")
+                valor = c3.number_input("Tarifa (S/ por hora)", min_value=0.0, step=1.0,
+                                        format="%.2f")
+            enviar = st.form_submit_button("Agregar", type="primary")
+        if not enviar:
+            return
+        texto = " ".join(str(texto).split())
+        tipo = f"{clase} · {texto.upper()}" if puestos else texto
+        existentes = {t.strip().upper() for t in todas.loc[todas["HOJA_ORIGEN"] == hoja, "TIPO"]}
+        error = ("Escribe el nombre del puesto." if puestos and not texto else
+                 "Escribe el tipo." if not texto else
+                 f"El nombre es muy largo: máximo {LARGO_TIPO} caracteres en total "
+                 f"(tiene {len(tipo)})." if len(tipo) > LARGO_TIPO else
+                 f"«{tipo}» ya existe." if tipo.upper() in existentes else
+                 "El monto debe ser mayor que 0." if valor <= 0 else "")
+        if error:
+            st.error(error, icon="⚠️")
+            return
+        try:
+            repo.agregar_tarifa(hoja, tipo, round(float(valor), 2), usuario.email)
+            st.session_state["_res_tarifas"] = (True, f"Agregado «{tipo}»: S/ {valor:,.2f}.")
+        except Exception as ex:
+            st.session_state["_res_tarifas"] = (False, f"No se agregó. Detalle: {ex}")
+        st.session_state[f"_ver_tarifas_{nombre}"] = (
+            st.session_state.get(f"_ver_tarifas_{nombre}", 0) + 1)
+        st.rerun()
 
 
 def _editor_tarifas(repo, usuario, base, nombre, columnas, boton, orden=None):
