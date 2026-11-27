@@ -140,6 +140,15 @@ def _foco_centro(repo, usuario, focos):
         if igual:
             st.caption(f"Ya existe: se usará «{igual}».")
             nuevo = igual
+    # Mover el último centro de un foco deja sin datos a las cuentas que lo ven por foco
+    fila_foco = focos[focos["FOCO"] == actual]
+    if actual and not fila_foco.empty and int(fila_foco["CENTROS"].iloc[0]) == 1 \
+            and int(fila_foco["CUENTAS"].iloc[0]) > 0:
+        st.warning(f"{codigo} es el único centro del foco «{actual}», y "
+                   f"{int(fila_foco['CUENTAS'].iloc[0])} cuenta(s) de Power BI lo ven por ese "
+                   "foco. Si lo mueves, se quedan sin datos: después dales el foco nuevo en "
+                   "🔐 Permisos Power BI. Si solo cambió el nombre de la dirección, usa "
+                   "«Cambiar el nombre del foco» (abajo): las cuentas pasan solas.", icon="⚠️")
     c1, c2 = st.columns(2)
     if c1.button("Cambiar foco", type="primary", key="btn_foco_centro", width="stretch",
                  disabled=not nuevo or nuevo == actual):
@@ -408,6 +417,16 @@ def _verificar(repo):
         ("datos_fuera", "Datos 2027 guardados con centros que el departamento no tiene",
          "Lo guardado no coincide con sus centros: asigna el centro al departamento o pide que "
          "corrijan la planilla."),
+        ("otra_facultad", "Centros de otra facultad asignados a un departamento",
+         "Su facultad es la que tiene más centros suyos; no cuentan las escuelas y programas de "
+         "pregrado (ahí dictan departamentos de otras facultades). Suele pasar tras una "
+         "recodificación: si no es un programa compartido, quítale el centro en ✏️ Actualizar."),
+        ("ficha_nombre_facultad", "Ficha TC con nombres de facultad que no coinciden con el centro",
+         "El concepto lleva el nombre de otra facultad o el anterior a una recodificación. "
+         "Las horas guardadas con ese nombre se ven como una línea aparte."),
+        ("permisos_bi_vacios", "Permisos de Power BI que no dan acceso a ningún centro",
+         "Esas cuentas no ven nada en el informe 2027: el foco se quedó sin centros o el prefijo "
+         "ya no coincide con ningún código. Cámbialos en 🔐 Permisos Power BI."),
     ]
     problemas = sum(1 for k, _, _ in revisiones if not v[k].empty)
     if not problemas:

@@ -362,7 +362,12 @@ class RepositorioDemo:
                                                      "PROBLEMA"]),
                 "deptos_sin_cecos": pd.DataFrame(
                     [(d,) for d, _ in self.departamentos() if not _CCOS_DEMO.get(d)],
-                    columns=["DEPARTAMENTO"])}
+                    columns=["DEPARTAMENTO"]),
+                "otra_facultad": pd.DataFrame(columns=[
+                    "DEPARTAMENTO", "SU_FACULTAD", "CENTRO_COSTO", "DESCRIPCION_CC", "DIRECCION"]),
+                "ficha_nombre_facultad": pd.DataFrame(columns=[
+                    "DEPARTAMENTO", "CENTRO_COSTO", "CONCEPTO", "DESCRIPCION_CC"]),
+                "permisos_bi_vacios": pd.DataFrame(columns=["TIPO", "VALOR", "CUENTAS"])}
 
     def guardar_cecos(self, filas, asignar_a, email) -> dict:
         extra = getattr(self, "_cat_extra", {})
@@ -1530,7 +1535,54 @@ class RepositorioSQL:
             "deptos_sin_cecos": leer(
                 "SELECT d.CODIGO AS DEPARTAMENTO FROM Departamentos d WHERE NOT EXISTS "
                 "(SELECT 1 FROM CECOS_DEPARTAMENTO_2027 x WHERE x.DEPARTAMENTO = d.CODIGO) ORDER BY 1"),
+            # Centros de otra facultad asignados a un departamento. Su facultad es
+            # la que tiene más centros suyos. No cuentan las escuelas y programas
+            # de pregrado (01.01.FF.03.*): ahí dictan cursos departamentos de otras
+            # facultades. Lo dejó a la vista la división de FACI (19/11).
+            "otra_facultad": leer(
+                "WITH a AS (SELECT d.DEPARTAMENTO, c.CENTRO_COSTO, c.DESCRIPCION_CC, c.DIRECCION "
+                "  FROM CECOS_DEPARTAMENTO_2027 d JOIN CENTROS_COSTOS_2027 c "
+                "  ON c.CENTRO_COSTO = d.CENTRO_COSTO WHERE c.DIRECCION LIKE 'FACULTAD%%'), "
+                "casa AS (SELECT DEPARTAMENTO, DIRECCION FROM (SELECT DEPARTAMENTO, DIRECCION, "
+                "  ROW_NUMBER() OVER (PARTITION BY DEPARTAMENTO ORDER BY COUNT(*) DESC) AS N "
+                "  FROM a GROUP BY DEPARTAMENTO, DIRECCION) x WHERE N = 1) "
+                "SELECT a.DEPARTAMENTO, casa.DIRECCION AS SU_FACULTAD, a.CENTRO_COSTO, "
+                "a.DESCRIPCION_CC, a.DIRECCION FROM a JOIN casa ON casa.DEPARTAMENTO = a.DEPARTAMENTO "
+                "WHERE a.DIRECCION <> casa.DIRECCION AND SUBSTRING(a.CENTRO_COSTO, 10, 2) <> '03' "
+                "ORDER BY 1, 3"),
+            # Concepto de ficha con nombre de facultad distinto del centro (nombre
+            # anterior a una recodificación), sin distinguir mayúsculas ni tildes
+            "ficha_nombre_facultad": leer(
+                "SELECT t.DEPARTAMENTO, t.CENTRO_COSTO, t.CONCEPTO, c.DESCRIPCION_CC "
+                "FROM CECO_CONCEPTO_TC t JOIN CENTROS_COSTOS_2027 c ON c.CENTRO_COSTO = t.CENTRO_COSTO "
+                "WHERE t.ACTIVO = 1 AND t.CONCEPTO COLLATE Latin1_General_CI_AI LIKE 'Facultad%%' "
+                "AND LTRIM(RTRIM(t.CONCEPTO)) COLLATE Latin1_General_CI_AI "
+                "    <> LTRIM(RTRIM(c.DESCRIPCION_CC)) COLLATE Latin1_General_CI_AI "
+                "ORDER BY 1, 2, 3"),
+            "permisos_bi_vacios": self._permisos_bi_vacios(),
         }
+
+    def _permisos_bi_vacios(self) -> pd.DataFrame:
+        """Permisos de Power BI que no dan acceso a ningún centro 2027: focos sin
+        centros (se movieron o se quedaron sin centros) y prefijos que no
+        coinciden con ningún código (recodificación). Vacío sin las tablas."""
+        existe = self._leer("SELECT OBJECT_ID('dbo.USUARIOS_FOCOS_2027', 'U') AS F, "
+                            "OBJECT_ID('dbo.USUARIOS_PREFIJOS_2027', 'U') AS P")
+        partes = []
+        if existe["F"].iloc[0] is not None:
+            partes.append(
+                "SELECT 'Foco' AS TIPO, u.FOCO AS VALOR, COUNT(*) AS CUENTAS "
+                "FROM USUARIOS_FOCOS_2027 u WHERE NOT EXISTS (SELECT 1 FROM vw_CENTROS_2027_PROYECTO p "
+                "JOIN CENTROS_COSTOS_2027 c ON c.CENTRO_COSTO = p.CENTRO_COSTO WHERE p.FOCO = u.FOCO) "
+                "GROUP BY u.FOCO")
+        if existe["P"].iloc[0] is not None:
+            partes.append(
+                "SELECT 'Prefijo', u.PREFIJO, COUNT(*) FROM USUARIOS_PREFIJOS_2027 u "
+                "WHERE NOT EXISTS (SELECT 1 FROM CENTROS_COSTOS_2027 c "
+                "WHERE c.CENTRO_COSTO LIKE u.PREFIJO + '%%') GROUP BY u.PREFIJO")
+        if not partes:
+            return pd.DataFrame(columns=["TIPO", "VALOR", "CUENTAS"])
+        return self._leer_medio(" UNION ALL ".join(partes) + " ORDER BY 1, 2")
 
     def _auditar_ceco(self, cur, email, accion, detalle):
         cur.execute("INSERT INTO AUDITORIA_CECOS_2027 (FECHA, EMAIL, ACCION, DETALLE) "
