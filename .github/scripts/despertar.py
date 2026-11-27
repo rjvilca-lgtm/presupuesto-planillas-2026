@@ -11,7 +11,7 @@ from playwright.sync_api import sync_playwright
 
 URL = os.environ.get("APP_URL",
                      "https://presupuesto-planillas-2026-uju9fwbb26t9awktyu79fa.streamlit.app/")
-TEXTO_APP = "Presupuesto de planillas"
+TEXTO_APP = "Presupuesto 2027"
 
 
 def app_cargada(page) -> bool:

@@ -127,7 +127,7 @@ def pantalla_login():
     """, unsafe_allow_html=True)
     _, centro, _ = st.columns([1, 2, 1])
     with centro, st.container(key="logincard", border=False):
-        st.markdown('<div class="login-title">Presupuesto de planillas</div>'
+        st.markdown('<div class="login-title">Presupuesto 2027</div>'
                     '<div class="login-sub">Accede con tu cuenta institucional</div>',
                     unsafe_allow_html=True)
         c_logo, c_boton = st.columns([5, 6], vertical_alignment="center")

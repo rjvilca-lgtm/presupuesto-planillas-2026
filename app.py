@@ -1,5 +1,5 @@
 """
-Presupuesto de planillas 2026 — aplicación de entrada.
+Presupuesto 2027 — aplicación de entrada.
 
 Reemplaza el formato Excel con macros por un motor único guiado por
 configuración (src/config.py). Corre en modo demostración sin base de datos;
@@ -97,7 +97,7 @@ def main():
 
 
 def _main(contexto):
-    st.set_page_config(page_title="Presupuesto de planillas 2026",
+    st.set_page_config(page_title="Presupuesto 2027",
                        page_icon="📋", layout="wide")
     inyectar_estilos()
 
@@ -107,7 +107,7 @@ def _main(contexto):
     fl = leer_flujo(repo)
 
     barra_usuario(usuario)
-    st.title("Presupuesto de planillas 2026")
+    st.title("Presupuesto 2027")
     if repo.modo == "demo":
         st.info("Modo demostración: los datos son de ejemplo y no se guardan en "
                 "ninguna base. Para conectar Azure SQL, configura los secrets.",

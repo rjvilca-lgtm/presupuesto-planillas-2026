@@ -1,1 +1,1 @@
-"""Motor de entrada de presupuesto de planillas — UCSP 2026."""
+"""Motor de entrada del Presupuesto 2027 (planillas) — UCSP."""

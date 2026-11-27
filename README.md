@@ -1,4 +1,4 @@
-# Presupuesto de planillas 2026
+# Presupuesto 2027
 
 Aplicación de entrada de presupuesto de planillas para jefes de departamento.
 Reemplaza el formato Excel con macros (`Sub_Actualizacion`) por un motor único
